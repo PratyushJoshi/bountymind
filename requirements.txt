@@ -1,0 +1,21 @@
+# =============================================================================
+# ReconFramework - Python Dependencies
+# =============================================================================
+# Core dependencies (required)
+PyYAML==6.0.1
+
+# Terminal UI (strongly recommended — graceful fallback if absent)
+rich==13.7.1
+
+# HTML report rendering (optional — falls back to <pre> block if absent)
+Markdown==3.5.2
+
+# Typing backports (Python 3.8 compatibility)
+typing-extensions==4.9.0
+
+# WAF detection & evasion (installed automatically by --bootstrap)
+wafw00f>=2.2.0
+arjun>=2.2.1
+
+# Optional cloud recon (installed by --bootstrap / install.sh)
+cloud_enum>=0.5

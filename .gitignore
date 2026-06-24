@@ -1,0 +1,49 @@
+# =============================================================================
+# ReconFramework .gitignore
+# =============================================================================
+
+# Active config (contains API keys — never commit)
+config/config.yaml
+
+# Output artifacts
+output/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Temp files
+*.tmp
+*.bak
+tmp_probe_list.txt
+tmp_nuclei_targets.txt

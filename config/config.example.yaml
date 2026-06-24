@@ -1,0 +1,426 @@
+# =============================================================================
+# ReconFramework - Example Configuration File
+# =============================================================================
+# Copy this file to config/config.yaml and fill in your values.
+# Fields marked [REQUIRED] must be set for the framework to run.
+# Fields marked [OPTIONAL] enhance capability but have fallbacks if missing.
+# Fields marked [FREE] require no API key.
+# Fields marked [FREE-TIER] have free usage limits.
+# Fields marked [PAID-OPTIONAL] are disabled by default; enable at your discretion.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# GENERAL SETTINGS
+# -----------------------------------------------------------------------------
+general:
+  # Output directory for all artifacts
+  output_dir: "output"
+  # Log file path
+  log_file: "logs/framework.log"
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  log_level: "INFO"
+  # Maximum concurrent workers for parallel tasks
+  max_concurrency: 5
+  # Global timeout (seconds) for individual tool invocations
+  tool_timeout: 300
+  # Report formats to generate: markdown, html (comma-separated list)
+  report_formats:
+    - markdown
+    - html
+
+# -----------------------------------------------------------------------------
+# API KEYS & PROVIDERS
+# Classification: open/free | free-tier | paid-optional
+# -----------------------------------------------------------------------------
+api_keys:
+
+  # Shodan - [FREE-TIER / PAID-OPTIONAL]
+  # Free-tier API allows limited queries. Used for passive banner/port data.
+  # Fallback: framework uses other passive sources if missing or rate-limited.
+  # Sign up: https://account.shodan.io/register
+  shodan: ""
+
+  # VirusTotal - [FREE-TIER / PAID-OPTIONAL]
+  # Free-tier API (4 lookups/min, 500/day). Used for passive subdomain data.
+  # Fallback: framework continues without VT passive enrichment if missing.
+  # Sign up: https://www.virustotal.com/gui/join-us
+  virustotal: ""
+
+  # SecurityTrails - [FREE-TIER / PAID-OPTIONAL]
+  # Free-tier allows limited passive DNS/subdomain queries.
+  # Fallback: framework uses subfinder/amass passive sources instead.
+  # Sign up: https://securitytrails.com/app/signup
+  securitytrails: ""
+
+  # Censys - [FREE-TIER / PAID-OPTIONAL]
+  # Free-tier account provides limited search queries.
+  # Fallback: Shodan or other passive sources used instead.
+  # Sign up: https://accounts.censys.io/register
+  censys_api_id: ""
+  censys_api_secret: ""
+
+  # GitHub - [FREE / OPTIONAL]
+  # Personal access token for GitHub dorking/recon (read-only public data).
+  # No token = unauthenticated rate-limited API (still works for basic use).
+  # Create at: https://github.com/settings/tokens
+  github: ""
+
+# -----------------------------------------------------------------------------
+# TOOL PATHS & SOURCES
+# Source types: apt | go | github | local
+# -----------------------------------------------------------------------------
+tools:
+
+  subfinder:
+    enabled: true
+    # Source type determines how the updater manages this tool
+    source: "go"  # apt or go
+    binary: "subfinder"
+    # Custom path override (leave empty to use PATH resolution)
+    path: ""
+
+  amass:
+    enabled: true
+    source: "apt"  # apt or go
+    binary: "amass"
+    path: ""
+
+  httpx:
+    enabled: true
+    source: "go"
+    binary: "httpx"
+    path: ""
+
+  httprobe:
+    enabled: false   # httpx preferred; enable httprobe as fallback if desired
+    source: "go"
+    binary: "httprobe"
+    path: ""
+
+  nuclei:
+    enabled: true
+    source: "go"
+    binary: "nuclei"
+    path: ""
+    # Path to nuclei templates directory
+    templates_path: ""  # Leave empty to use default (~/.local/nuclei-templates)
+    # GitHub repo for templates (used by updater)
+    templates_repo: "https://github.com/projectdiscovery/nuclei-templates"
+
+  ffuf:
+    enabled: true
+    source: "apt"  # apt or go
+    binary: "ffuf"
+    path: ""
+
+  dirsearch:
+    enabled: true
+    source: "github"
+    binary: "dirsearch"
+    path: ""  # e.g. /opt/dirsearch/dirsearch.py
+
+  nmap:
+    enabled: true
+    source: "apt"
+    binary: "nmap"
+    path: ""
+
+  whatweb:
+    enabled: true
+    source: "apt"
+    binary: "whatweb"
+    path: ""
+
+  wafw00f:
+    enabled: true
+    source: "apt"
+    binary: "wafw00f"
+    path: ""
+
+  # -------------------------------------------------------------------------
+  # Extended tooling (AegisAutomata additions)
+  # -------------------------------------------------------------------------
+
+  gau:
+    enabled: true
+    source: "go"
+    binary: "gau"
+    path: ""
+
+  waybackurls:
+    enabled: true
+    source: "go"
+    binary: "waybackurls"
+    path: ""
+
+  katana:
+    enabled: true
+    source: "go"
+    binary: "katana"
+    path: ""
+
+  dnsx:
+    enabled: true
+    source: "go"
+    binary: "dnsx"
+    path: ""
+
+  naabu:
+    # naabu is DISABLED by default — nmap provides conservative coverage.
+    # Enable naabu for faster full-range port discovery when explicitly needed.
+    enabled: false
+    source: "go"
+    binary: "naabu"
+    path: ""
+
+  subzy:
+    enabled: true
+    source: "go"
+    binary: "subzy"
+    path: ""
+
+  gowitness:
+    enabled: true
+    source: "go"
+    binary: "gowitness"
+    path: ""
+
+  cloud_enum:
+    enabled: true
+    source: "pip"
+    binary: "cloud_enum"
+    path: ""
+
+  secretfinder:
+    # SecretFinder is a Python script cloned from GitHub
+    enabled: true
+    source: "github"
+    binary: "python3"
+    path: ""
+    git_repo: "https://github.com/m4ll0k/SecretFinder.git"
+    git_dest: "tools/SecretFinder"
+
+# -----------------------------------------------------------------------------
+# DISCOVERY SETTINGS
+# -----------------------------------------------------------------------------
+discovery:
+  # Passive subdomain enumeration sources (used by subfinder/amass)
+  passive_sources:
+    - "crtsh"        # [FREE] Certificate Transparency logs - no key required
+    - "threatcrowd"  # [FREE] Passive DNS
+    - "hackertarget" # [FREE] Online service
+    - "certspotter"  # [FREE] SSL cert monitoring
+    - "dnsdumpster"  # [FREE] DNS recon
+    - "shodan"       # [FREE-TIER] Uses api_keys.shodan if set
+    - "virustotal"   # [FREE-TIER] Uses api_keys.virustotal if set
+    - "securitytrails" # [FREE-TIER] Uses api_keys.securitytrails if set
+
+  # Maximum subdomains to process per target (safety limit)
+  max_subdomains: 500
+
+  # Amass passive-only mode (no active DNS brute force by default)
+  amass_passive_only: true
+
+  # Subfinder concurrency
+  subfinder_threads: 10
+
+  # Bulk DNS resolution with dnsx (fast A/CNAME record resolution)
+  # Used to resolve large subdomain sets before probing
+  dnsx_enabled: true
+  # dnsx concurrent threads
+  dnsx_threads: 100
+
+# -----------------------------------------------------------------------------
+# PROBING SETTINGS
+# -----------------------------------------------------------------------------
+probing:
+  # HTTP probing timeouts (seconds)
+  http_timeout: 10
+  # Maximum concurrent HTTP probes
+  http_threads: 20
+  # Follow redirects
+  follow_redirects: true
+  # Maximum redirect depth
+  max_redirects: 5
+
+  # Port scanning - safe, limited default set
+  # Only well-known web/service ports scanned by default
+  port_scan_enabled: true
+  # Ports to scan (conservative default - common web + admin ports)
+  ports: "80,443,8080,8443,8000,8888,3000,4443,8008,9090,9443"
+  # Nmap scan intensity: -T1 (paranoid) to -T4 (aggressive); default T2 (polite)
+  nmap_timing: "T2"
+  # Nmap flags (non-intrusive version/banner detection only)
+  nmap_flags: "-sV --version-intensity 3 -sC"
+
+  # Technology detection
+  tech_detection_enabled: true
+
+  # WAF detection
+  waf_detection_enabled: true
+
+  # Directory/file discovery
+  dir_discovery_enabled: true
+  # Wordlist for directory discovery (use a small/medium safe list by default)
+  dir_wordlist: "/usr/share/wordlists/dirb/common.txt"
+  # Fallback wordlist path if primary not found
+  dir_wordlist_fallback: "/usr/share/seclists/Discovery/Web-Content/common.txt"
+  # Rate limit (requests/second) - keep low to avoid disruption
+  dir_rate_limit: 10
+  # Maximum recursion depth (0 = no recursion, 1 = shallow)
+  dir_recursion_depth: 0
+  # HTTP status codes to consider as "found"
+  dir_match_codes: "200,204,301,302,307,401,403"
+  # Timeout per request (seconds)
+  dir_timeout: 10
+
+  # Fast port scanning with naabu (DISABLED by default; nmap is preferred)
+  # naabu is faster for full port ranges but requires more tuning for safety
+  naabu_enabled: false
+  # Port preset for naabu: "top-100", "top-1000", or explicit "80,443,8080"
+  naabu_ports: "top-100"
+  # naabu packet rate (packets/second — keep conservative)
+  naabu_rate: 1000
+
+# -----------------------------------------------------------------------------
+# SCANNING SETTINGS
+# -----------------------------------------------------------------------------
+scanning:
+  # Nuclei severity levels to include
+  severity_levels:
+    - "info"
+    - "low"
+    - "medium"
+    - "high"
+    - "critical"
+
+  # Nuclei template categories to EXCLUDE (always excluded for safety)
+  # These categories are intrusive, destructive, or denial-of-service capable
+  excluded_tags:
+    - "dos"
+    - "fuzz"
+    - "brute-force"
+    - "bruteforce"
+    - "intrusive"
+    - "destructive"
+    - "exploit"
+    - "rce"
+    - "sqli"
+
+  # Nuclei template categories to include (safe, informational)
+  included_tags:
+    - "cve"
+    - "exposure"
+    - "misconfig"
+    - "technology"
+    - "default-login"
+    - "takeover"
+    - "config"
+    - "info"
+    - "panel"
+    - "token"
+
+  # Rate limit for nuclei (requests/second)
+  nuclei_rate_limit: 50
+  # Nuclei concurrency (templates run in parallel)
+  nuclei_bulk_size: 25
+  # Nuclei concurrency (targets run in parallel)
+  nuclei_concurrency: 10
+  # Timeout per nuclei request (seconds)
+  nuclei_timeout: 10
+
+# -----------------------------------------------------------------------------
+# REPORTING SETTINGS
+# -----------------------------------------------------------------------------
+reporting:
+  # Company/team branding for report header
+  organization: "Security Assessment Team"
+  # Report title prefix
+  report_title: "Automated Reconnaissance & Vulnerability Assessment"
+  # Include raw tool output references in report
+  include_raw_references: true
+  # Severity threshold for highlighting in report
+  highlight_severity: "high"
+  # Include executive summary
+  include_executive_summary: true
+
+# -----------------------------------------------------------------------------
+# SAFETY & SCOPE CONTROLS
+# -----------------------------------------------------------------------------
+safety:
+  # Master safety switch - NEVER set to false in production
+  safe_mode: true
+  # Confirm before running any scan (interactive mode)
+  require_confirmation: false
+  # Respect robots.txt (informational note only - does not enforce)
+  note_robots_txt: true
+  # Maximum requests per second across all modules (global rate cap)
+  global_rate_limit: 20
+  # Strictly unauthenticated mode (disables any auth-capable features)
+  unauthenticated_only: true
+
+# -----------------------------------------------------------------------------
+# URL HARVESTING (gau, waybackurls, katana)
+# Classification: Open/Free
+# -----------------------------------------------------------------------------
+url_harvesting:
+  enabled: true
+
+  # Maximum URLs to collect per target (safety cap)
+  max_urls_per_target: 2000
+
+  # Katana web crawler depth (3 = shallow; keep low to avoid disruption)
+  katana_depth: 3
+
+  # Enable katana JavaScript crawling (discovers JS-rendered endpoints)
+  # This is non-intrusive passive crawling only
+  katana_js_crawl: true
+
+# -----------------------------------------------------------------------------
+# SECRET SCANNING (SecretFinder)
+# Tool: https://github.com/m4ll0k/SecretFinder
+# Classification: Open/Free (GitHub clone)
+# Scans JavaScript files for hardcoded secrets, API keys, tokens
+# Note: Only fetches and parses JS files — does not submit any credentials
+# -----------------------------------------------------------------------------
+secret_scanning:
+  enabled: true
+
+  # Path to SecretFinder.py (cloned automatically if absent via --update-tools)
+  secretfinder_path: "tools/SecretFinder/SecretFinder.py"
+
+  # Maximum JS files to scan per session (avoid unbounded scanning)
+  max_js_files: 50
+
+# -----------------------------------------------------------------------------
+# CLOUD BUCKET ENUMERATION (cloud_enum)
+# Tool: https://github.com/initstring/cloud_enum
+# Classification: Open/Free (pip package)
+# Enumerates AWS S3, GCP, Azure Blob, and other cloud storage surfaces
+# Only checks for publicly accessible/misconfigured buckets (passive)
+# Does NOT attempt to read/write bucket contents
+# -----------------------------------------------------------------------------
+cloud_buckets:
+  enabled: true
+
+  # Concurrent cloud_enum threads (keep moderate to avoid rate limits)
+  threads: 10
+
+  # Timeout for cloud enumeration (seconds)
+  timeout_seconds: 300
+
+# -----------------------------------------------------------------------------
+# VISUAL RECONNAISSANCE (gowitness)
+# Tool: https://github.com/sensepost/gowitness
+# Classification: Open/Free
+# Captures screenshots of live web interfaces for visual triage
+# Non-intrusive: only performs HTTP GET requests with a headless browser
+# -----------------------------------------------------------------------------
+screenshots:
+  enabled: true
+
+  # Timeout for screenshot capture session (seconds)
+  timeout_seconds: 600
+
+  # Maximum number of hosts to screenshot per session
+  max_hosts: 100
