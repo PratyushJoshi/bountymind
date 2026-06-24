@@ -558,7 +558,10 @@ class ProbingModule:
 
         # dirsearch may be invoked as a script
         if binary.endswith(".py"):
-            cmd_base = ["python3", binary]
+            script = Path(binary)
+            venv_python = script.parent / "venv" / "bin" / "python"
+            python_bin = str(venv_python) if venv_python.exists() else "python3"
+            cmd_base = [python_bin, binary]
         else:
             cmd_base = [binary]
 

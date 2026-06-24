@@ -196,9 +196,13 @@ class JSSecretScanner:
         Run SecretFinder.py on a single JS URL.
         SecretFinder fetches the URL and outputs matched secrets to stdout.
         """
+        script = Path(script_path)
+        venv_python = script.parent / "venv" / "bin" / "python"
+        python_bin = str(venv_python) if venv_python.exists() else "python3"
+
         result = self._runner.run(
             tool_name="secretfinder",
-            cmd=["python3", script_path, "-i", url, "-o", "cli"],
+            cmd=[python_bin, script_path, "-i", url, "-o", "cli"],
             target=url,
             timeout=30,
             save_raw=True,

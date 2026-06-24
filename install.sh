@@ -146,23 +146,114 @@ go_install "github.com/sensepost/gowitness@latest"
 go_install "github.com/ffuf/ffuf/v2@latest"
 go_install "github.com/owasp-amass/amass/v4/...@latest"
 
-# ── 4. Python dependencies ────────────────────────────────────────────────────
-header "Step 4/9 — Python Dependencies"
+echo ""
+echo "══════════════════════════════════════════"
+echo "  Step 4/9 — Python Dependencies"
+echo "══════════════════════════════════════════"
 
-cd "$SCRIPT_DIR"
-pip3 install -q --upgrade pip
-pip3 install -q -r requirements.txt && success "Python requirements installed"
+# ------------------------------------------------------------
+# 1. Ensure pipx for the real user (Kali-safe)
+# ------------------------------------------------------------
+export PATH="$REAL_HOME/.local/bin:$PATH"
 
-# ── 5. Pip security tools ─────────────────────────────────────────────────────
-header "Step 5/9 — Pip Security Tools"
-
-PIP_TOOLS=("wafw00f" "arjun" "cloud_enum")
-for tool in "${PIP_TOOLS[@]}"; do
-    if pip3 show "$tool" &>/dev/null; then
-        info "  $tool — already installed"
+if ! command -v pipx &>/dev/null; then
+    echo "[*] pipx not found – installing for $REAL_USER..."
+    # Try to install pipx via pip in user mode (works on most systems)
+    if sudo -u "$REAL_USER" env HOME="$REAL_HOME" PATH="$REAL_HOME/.local/bin:$PATH" \
+        python3 -m pip install --user pipx &>/dev/null; then
+        echo "[+] pipx installed (user mode)"
     else
-        info "  Installing $tool ..."
-        pip3 install -q "$tool" && success "  $tool installed" || warn "  $tool failed (non-fatal)"
+        # Fallback to system package manager (apt / dnf)
+        if command -v apt &>/dev/null; then
+            sudo apt update -y && sudo apt install -y pipx
+        elif command -v dnf &>/dev/null; then
+            sudo dnf install -y pipx
+        else
+            echo "[!] Could not install pipx automatically."
+            echo "    Please install pipx manually: https://pipx.pypa.io/stable/installation/"
+            exit 1
+        fi
+    fi
+fi
+
+# Make sure pipx-installed binaries are on PATH (for this session)
+PIPX_BIN="$(command -v pipx || true)"
+if [[ -z "$PIPX_BIN" && -x "$REAL_HOME/.local/bin/pipx" ]]; then
+    PIPX_BIN="$REAL_HOME/.local/bin/pipx"
+fi
+
+if [[ -z "$PIPX_BIN" ]]; then
+    echo "[!] pipx is still unavailable after installation attempt."
+    exit 1
+fi
+
+sudo -u "$REAL_USER" env HOME="$REAL_HOME" PATH="$REAL_HOME/.local/bin:$PATH" \
+    "$PIPX_BIN" ensurepath &>/dev/null || true
+
+# ------------------------------------------------------------
+# 2. Install all Python CLI tools via pipx
+# ------------------------------------------------------------
+PYTHON_TOOLS=(
+    "cloud_enum"
+    "s3scanner"
+    "uro"
+    "xnlinkfinder"
+    "wafw00f"
+    "arjun"
+)
+
+for tool in "${PYTHON_TOOLS[@]}"; do
+    if command -v "$tool" &>/dev/null; then
+        echo "[*]   $tool — already installed"
+    else
+        echo "[*]   Installing $tool via pipx ..."
+        if sudo -u "$REAL_USER" env HOME="$REAL_HOME" PATH="$REAL_HOME/.local/bin:$PATH" \
+            "$PIPX_BIN" install "$tool" --verbose 2>&1; then
+            echo "[+]   $tool installed"
+        else
+            echo "[!]   $tool install failed (non-fatal)"
+            continue
+        fi
+    fi
+
+    tool_path="$REAL_HOME/.local/bin/$tool"
+    if [[ -x "$tool_path" ]]; then
+        ln -sf "$tool_path" "/usr/local/bin/$tool" 2>/dev/null || true
+    fi
+done
+
+# ------------------------------------------------------------
+# 3. SecretFinder – local venv (no system pip)
+# ------------------------------------------------------------
+mkdir -p "$SCRIPT_DIR/tools"
+SF_DIR="$SCRIPT_DIR/tools/SecretFinder"
+if [ ! -d "$SF_DIR" ]; then
+    echo "[*] Cloning SecretFinder repository..."
+    git clone https://github.com/m4ll0k/SecretFinder.git "$SF_DIR"
+fi
+
+if [ -f "$SF_DIR/SecretFinder.py" ]; then
+    echo "[*] Creating local virtual environment..."
+    python3 -m venv "$SF_DIR/venv"
+    if "$SF_DIR/venv/bin/pip" install -q -r "$SF_DIR/requirements.txt"; then
+        echo "[+] SecretFinder installed (venv)"
+    else
+        echo "[!] SecretFinder dependencies failed (non-fatal)"
+    fi
+else
+    echo "[!] SecretFinder not available (non-fatal)"
+fi
+
+echo "[✓] Python dependencies ready"
+
+# ── 5. Python security tool checks ────────────────────────────────────────────
+header "Step 5/9 — Python Security Tool Checks"
+
+for tool in "${PYTHON_TOOLS[@]}"; do
+    if command -v "$tool" &>/dev/null; then
+        success "  $tool available"
+    else
+        warn "  $tool not found on PATH (non-fatal)"
     fi
 done
 
@@ -172,14 +263,9 @@ header "Step 6/9 — GitHub Tools"
 # SecretFinder
 SF_DIR="$SCRIPT_DIR/tools/SecretFinder"
 if [[ -f "$SF_DIR/SecretFinder.py" ]]; then
-    info "SecretFinder — already present"
+    success "SecretFinder ready"
 else
-    info "Cloning SecretFinder..."
-    mkdir -p "$SCRIPT_DIR/tools"
-    git clone -q https://github.com/m4ll0k/SecretFinder.git "$SF_DIR" \
-        && pip3 install -q -r "$SF_DIR/requirements.txt" \
-        && success "SecretFinder installed" \
-        || warn "SecretFinder clone failed (non-fatal)"
+    warn "SecretFinder missing (non-fatal)"
 fi
 
 # dirsearch
@@ -189,9 +275,21 @@ if [[ -d "$DIRSEARCH_DIR" ]]; then
 else
     info "Cloning dirsearch..."
     git clone -q https://github.com/maurosoria/dirsearch.git "$DIRSEARCH_DIR" \
-        && pip3 install -q -r "$DIRSEARCH_DIR/requirements.txt" \
-        && success "dirsearch installed" \
         || warn "dirsearch clone failed (non-fatal)"
+fi
+
+if [[ -f "$DIRSEARCH_DIR/dirsearch.py" ]]; then
+    python3 -m venv "$DIRSEARCH_DIR/venv"
+    if "$DIRSEARCH_DIR/venv/bin/pip" install -q -r "$DIRSEARCH_DIR/requirements.txt"; then
+        cat > /usr/local/bin/dirsearch << EOF
+#!/usr/bin/env bash
+exec "$DIRSEARCH_DIR/venv/bin/python" "$DIRSEARCH_DIR/dirsearch.py" "\$@"
+EOF
+        chmod +x /usr/local/bin/dirsearch
+        success "dirsearch ready (venv)"
+    else
+        warn "dirsearch dependencies failed (non-fatal)"
+    fi
 fi
 
 # ── 7. Nuclei templates ───────────────────────────────────────────────────────
@@ -227,8 +325,16 @@ chown -R "$REAL_USER:$REAL_USER" "$SCRIPT_DIR" 2>/dev/null || true
 # ── 9. CLI entrypoint registration ────────────────────────────────────────────
 header "Step 9/9 — CLI Registration (bountymind)"
 
-# Install the Python package in editable mode so 'bountymind' goes into PATH
-pip3 install -q -e "$SCRIPT_DIR" && success "Package installed (editable)"
+# Install BountyMind's own Python dependencies in a project-local venv.
+APP_VENV="$SCRIPT_DIR/.venv"
+python3 -m venv "$APP_VENV"
+"$APP_VENV/bin/pip" install -q --upgrade pip
+if "$APP_VENV/bin/pip" install -q -e "$SCRIPT_DIR"; then
+    success "Package installed in local venv"
+else
+    error "Could not install BountyMind dependencies in local venv"
+    exit 1
+fi
 
 # Also create a direct symlink as belt-and-braces fallback
 MAIN_SCRIPT="$SCRIPT_DIR/main.py"
@@ -243,7 +349,7 @@ cat > /usr/local/bin/bountymind << EOF
 #!/usr/bin/env bash
 # BountyMind CLI wrapper — auto-generated by install.sh
 cd "$SCRIPT_DIR"
-exec python3 "$MAIN_SCRIPT" "\$@"
+exec "$APP_VENV/bin/python" "$MAIN_SCRIPT" "\$@"
 EOF
 chmod +x /usr/local/bin/bountymind
 success "Registered: /usr/local/bin/bountymind"
