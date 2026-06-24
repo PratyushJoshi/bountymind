@@ -196,6 +196,7 @@ class URLHarvester:
 
         import subprocess
         try:
+            self._runner._ensure_pipx_path()
             proc = subprocess.run(
                 [binary, domain],
                 capture_output=True,

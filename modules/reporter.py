@@ -405,7 +405,7 @@ class ReportGenerator:
     def run(self, session: ScanSession) -> List[Path]:
         """Generate all configured report formats. Returns list of output paths."""
         self._progress.print_phase("Phase 3 — Report Generation")
-        session.end_time = datetime.datetime.utcnow()
+        session.end_time = datetime.datetime.now(datetime.timezone.utc)
 
         # Generate manual flags
         session.manual_flags = self._flag_generator.generate(session)

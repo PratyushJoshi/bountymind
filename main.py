@@ -354,7 +354,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
     session = ScanSession(
         session_id=session_id,
         targets=targets,
-        start_time=datetime.datetime.utcnow(),
+        start_time=datetime.datetime.now(datetime.timezone.utc),
     )
     progress.print_info(f"Session ID: {session_id}")
     log.info("Session ID: %s | Targets: %s", session_id, targets)

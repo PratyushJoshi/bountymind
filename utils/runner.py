@@ -53,6 +53,13 @@ class CommandRunner:
         self._raw_dir = raw_output_dir or Path("output/raw")
         self._raw_dir.mkdir(parents=True, exist_ok=True)
 
+    def _ensure_pipx_path(self) -> None:
+        """Add pipx's binary directory to PATH if missing."""
+        pipx_bin = os.path.expanduser("~/.local/bin")
+        current_path = os.environ.get("PATH", "")
+        if pipx_bin not in current_path:
+            os.environ["PATH"] = current_path + os.pathsep + pipx_bin if current_path else pipx_bin
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -84,6 +91,7 @@ class CommandRunner:
         Returns:
             ToolResult with return code, stdout, stderr, and duration.
         """
+        self._ensure_pipx_path()
         cmd_list = self._normalize_cmd(cmd)
 
         if check_exists:
@@ -170,13 +178,15 @@ class CommandRunner:
 
     def check_binary_available(self, binary: str) -> bool:
         """Return True if binary is found on PATH."""
-        return shutil.which(binary) is not None
+        self._ensure_pipx_path()
+        return shutil.which(binary) is not None or (Path(binary).is_absolute() and Path(binary).exists())
 
     def get_version(self, binary: str, version_flag: str = "--version") -> str:
         """
         Attempt to retrieve the version string of a tool.
         Returns empty string on failure.
         """
+        self._ensure_pipx_path()
         try:
             result = subprocess.run(
                 [binary, version_flag],

@@ -85,7 +85,7 @@ class SubdomainRecord:
     cname: Optional[str] = None
     is_wildcard: bool = False
     dangling_cname: bool = False  # possible takeover indicator
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -102,7 +102,7 @@ class LiveHost:
     headers: Dict[str, str] = field(default_factory=dict)
     server_banner: str = ""
     screenshot_path: Optional[str] = None   # populated by ScreenshotModule
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -116,7 +116,7 @@ class PortService:
     version: str = ""
     banner: str = ""
     state: str = "open"
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -129,7 +129,7 @@ class DirectoryFinding:
     redirect_url: str = ""
     source_tool: str = ""
     is_interesting: bool = False  # flagged for manual review
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -148,7 +148,7 @@ class NucleiFinding:
     cvss_score: Optional[float] = None
     cve_ids: List[str] = field(default_factory=list)
     raw: str = ""
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -167,7 +167,7 @@ class ManualFlag:
     analyst_steps: List[str] = field(default_factory=list)
     auth_required: bool = False
     severity_hint: Severity = Severity.MEDIUM
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -178,7 +178,7 @@ class SecretFinding:
     secret_type: str   # e.g. "AWS Access Key", "API Key", "JWT"
     secret_value: str  # The matched value (may be partially redacted)
     source_tool: str = "secretfinder"
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -191,7 +191,7 @@ class CloudBucketFinding:
     is_public: bool = True
     finding_detail: str = ""
     source_tool: str = "cloud_enum"
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -202,7 +202,7 @@ class HarvestedURL:
     source: str        # gau | waybackurls | katana
     is_js: bool = False
     is_interesting: bool = False  # matches endpoint patterns
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -216,7 +216,7 @@ class EvasionFinding:
     technique: str = ""        # e.g. "header-spoof", "nuclei-waf-bypass", "arjun"
     source_tool: str = ""
     raw: str = ""
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass
@@ -232,7 +232,7 @@ class ToolResult:
     duration_seconds: float
     timed_out: bool = False
     raw_output_path: str = ""
-    timestamp: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 @dataclass

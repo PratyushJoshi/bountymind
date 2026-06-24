@@ -205,7 +205,7 @@ class ProbingModule:
             "-no-color",
         ]
 
-        if self._cfg._cfg.get("probing", {}).get("follow_redirects", True):
+        if self._cfg.get("probing", "follow_redirects", default=True):
             cmd += ["-follow-redirects", "-max-redirects", "5"]
 
         result = self._runner.run(
@@ -254,6 +254,7 @@ class ProbingModule:
         import subprocess
         import os
         try:
+            self._runner._ensure_pipx_path()
             proc = subprocess.run(
                 [binary],
                 input=hosts_str,
