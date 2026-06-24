@@ -433,6 +433,10 @@ EOF
 chmod +x /usr/local/bin/bountymind
 success "Registered: /usr/local/bin/bountymind"
 
+# Compatibility alias for the common shorthand/typo.
+ln -sf /usr/local/bin/bountymind /usr/local/bin/bountymin 2>/dev/null || true
+success "Registered alias: /usr/local/bin/bountymin"
+
 # Add Go bin to system PATH permanently
 PROFILE_D="/etc/profile.d/bountymind.sh"
 cat > "$PROFILE_D" << 'EOF'
@@ -451,6 +455,8 @@ echo -e "    ${BOLD}bountymind -d example.com${NC}"
 echo -e "    ${BOLD}bountymind -l targets.txt${NC}"
 echo -e "    ${BOLD}bountymind -d example.com --format markdown,html${NC}"
 echo -e "    ${BOLD}bountymind --check-env${NC}"
+echo -e "    ${BOLD}bountymind --update${NC}"
+echo -e "    ${BOLD}bountymin --update${NC}  ${YELLOW}(alias)${NC}"
 echo -e "    ${BOLD}bountymind --update-tools${NC}"
 echo -e "    ${BOLD}bountymind --help${NC}"
 echo ""

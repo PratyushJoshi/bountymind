@@ -77,6 +77,10 @@ Examples:
   Update all tools and templates then exit:
     bountymind --update-tools --dry-run
 
+  Self-update BountyMind from GitHub, then rerun install.sh if changed:
+    bountymind --update
+    bountymind --update --dry-run
+
   Increase concurrency:
     bountymind -d example.com --concurrency 10
 
@@ -138,6 +142,12 @@ Safety note:
         action="store_true",
         default=False,
         help="Install all external tools (pipx, go, SecretFinder venv) then exit unless targets given",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        default=False,
+        help="Fetch latest BountyMind code from GitHub and run install.sh if changes were applied",
     )
     parser.add_argument(
         "--update-tools",
@@ -312,6 +322,13 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         progress.set_phase_status("bootstrap", "done")
     elif not has_targets:
         progress.set_phase_status("bootstrap", "skipped")
+
+    if args.update:
+        result = updater.self_update(dry_run=args.dry_run)
+        if not args.domain and not args.target_list:
+            return result
+        if result != 0:
+            return result
 
     if args.bootstrap:
         updater.bootstrap_all_tools(dry_run=args.dry_run)

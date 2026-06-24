@@ -42,6 +42,8 @@ from utils.runner import CommandRunner
 
 log = get_logger("updater")
 
+PROJECT_REPO_URL = "https://github.com/PratyushJoshi/bountymind.git"
+
 
 @dataclass
 class ToolStatus:
@@ -1064,6 +1066,161 @@ class ToolUpdater:
         # Ensure SecretFinder is cloned (safe, one-time git clone)
         if self._cfg.secret_scanning_enabled:
             self.ensure_secretfinder(dry_run)
+
+    def self_update(self, dry_run: bool = False) -> int:
+        """
+        Fast-forward this local BountyMind checkout from GitHub and rerun
+        install.sh only when new repository changes were applied.
+
+        Returns a process-style exit code:
+        - 0: up to date, updated successfully, or dry-run completed
+        - 1: update/install failed or repository state is unsafe
+        """
+        self._progress.print_phase("BountyMind Self Update")
+        repo_root = self._git(["rev-parse", "--show-toplevel"]).strip()
+        if not repo_root:
+            self._progress.print_error("This command must be run inside a git checkout.")
+            return 1
+
+        repo = Path(repo_root)
+        current_branch = self._git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo).strip()
+        if not current_branch or current_branch == "HEAD":
+            self._progress.print_error("Cannot self-update from a detached HEAD checkout.")
+            return 1
+
+        before = self._git(["rev-parse", "HEAD"], cwd=repo).strip()
+        remote_ref = ""
+        upstream = self._git(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=repo,
+            allow_failure=True,
+        ).strip()
+        if not upstream:
+            upstream = self._default_upstream(repo)
+        if upstream:
+            remote_ref = upstream
+        else:
+            remote_ref = "FETCH_HEAD"
+        if not upstream:
+            self._progress.print_warning(
+                f"No upstream branch found. Falling back to official repo: {PROJECT_REPO_URL}"
+            )
+
+        if dry_run:
+            fetch_msg = (
+                f"git fetch origin --prune ({repo})"
+                if upstream else f"git fetch {PROJECT_REPO_URL} ({repo})"
+            )
+            self._progress.print_info(f"Would run: {fetch_msg}")
+            self._progress.print_info(f"Would fast-forward {current_branch} from {remote_ref}")
+            self._progress.print_info("Would run install.sh only if HEAD changes")
+            return 0
+
+        unstaged = self._run_git(["diff", "--quiet"], cwd=repo)
+        staged = self._run_git(["diff", "--cached", "--quiet"], cwd=repo)
+        if unstaged.returncode != 0 or staged.returncode != 0:
+            self._progress.print_error(
+                "Tracked local changes are present. Commit or stash them before running --update."
+            )
+            return 1
+
+        self._progress.print_info("Fetching latest changes from GitHub...")
+        fetch_args = ["fetch", "origin", "--prune"] if upstream else ["fetch", PROJECT_REPO_URL]
+        fetch = self._run_git(fetch_args, cwd=repo)
+        if fetch.returncode != 0:
+            self._progress.print_error(f"git fetch failed: {fetch.stderr.strip()[:300]}")
+            return 1
+
+        counts = self._git(
+            ["rev-list", "--left-right", "--count", f"HEAD...{remote_ref}"],
+            cwd=repo,
+            allow_failure=True,
+        ).split()
+        if len(counts) != 2:
+            self._progress.print_error(f"Could not compare HEAD with {remote_ref}.")
+            return 1
+        ahead, behind = (int(counts[0]), int(counts[1]))
+        if behind == 0:
+            self._progress.print_success("BountyMind is already up to date.")
+            return 0
+        if ahead > 0:
+            self._progress.print_error(
+                f"Local branch has {ahead} commit(s) not on {remote_ref}. "
+                "Refusing automatic update to avoid overwriting local work."
+            )
+            return 1
+
+        self._progress.print_info(f"Applying {behind} upstream commit(s) with a fast-forward update...")
+        update_args = ["pull", "--ff-only"] if upstream else ["merge", "--ff-only", "FETCH_HEAD"]
+        update = self._run_git(update_args, cwd=repo)
+        if update.returncode != 0:
+            self._progress.print_error(f"git fast-forward failed: {update.stderr.strip()[:500]}")
+            return 1
+
+        after = self._git(["rev-parse", "HEAD"], cwd=repo).strip()
+        if after == before:
+            self._progress.print_success("No repository changes applied; install.sh not needed.")
+            return 0
+
+        self._progress.print_success(f"Updated BountyMind: {before[:8]} -> {after[:8]}")
+        return self._run_installer_after_update(repo)
+
+    def _default_upstream(self, repo: Path) -> str:
+        for branch in ("origin/main", "origin/master"):
+            if self._git(["rev-parse", "--verify", branch], cwd=repo, allow_failure=True).strip():
+                return branch
+        return ""
+
+    def _run_installer_after_update(self, repo: Path) -> int:
+        installer = repo / "install.sh"
+        if not installer.exists():
+            self._progress.print_warning("install.sh not found after update; skipping installer.")
+            return 0
+        if os.name == "nt":
+            self._progress.print_warning(
+                "Repository updated, but install.sh is Linux-only. "
+                "Run it from Kali/Ubuntu/Debian to refresh external tools."
+            )
+            return 0
+        if not shutil.which("bash"):
+            self._progress.print_error("bash not found; cannot run install.sh.")
+            return 1
+
+        cmd = ["bash", str(installer)]
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
+            if not shutil.which("sudo"):
+                self._progress.print_error("install.sh needs root; sudo is not available.")
+                return 1
+            cmd = ["sudo", *cmd]
+
+        self._progress.print_info("Repository changed; running install.sh to refresh tools...")
+        result = subprocess.run(cmd, cwd=str(repo), text=True)
+        if result.returncode == 0:
+            self._progress.print_success("Self-update complete and install.sh finished successfully.")
+            return 0
+        self._progress.print_error(f"install.sh failed with exit code {result.returncode}.")
+        return result.returncode or 1
+
+    def _git(
+        self,
+        args: List[str],
+        cwd: Optional[Path] = None,
+        allow_failure: bool = False,
+    ) -> str:
+        result = self._run_git(args, cwd=cwd)
+        if result.returncode != 0 and not allow_failure:
+            return ""
+        return result.stdout or ""
+
+    @staticmethod
+    def _run_git(args: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
 
     # ------------------------------------------------------------------
     # Per-tool check

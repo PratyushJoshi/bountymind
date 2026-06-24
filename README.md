@@ -40,8 +40,12 @@ bountymind -d example.com -v
 
 # Install/update tools
 bountymind --bootstrap
+bountymind --update                # self-update from GitHub, then run install.sh if changed
 bountymind --update-tools
 bountymind --update-tools --dry-run    # show what would be installed, change nothing
+
+# Compatibility alias
+bountymin --update
 
 # Environment check
 bountymind --check-env
@@ -74,8 +78,9 @@ bountymind --help
 | Flag | Description |
 |------|-------------|
 | `--bootstrap` | Install all external tools (pipx, Go, cargo, git wrappers, SecretFinder) then exit unless a target is given |
+| `--update` | Self-update BountyMind from GitHub with `git pull --ff-only`; if code changed, run `install.sh` automatically |
 | `--update-tools` | Update tools + nuclei templates, then continue with the scan |
-| `--dry-run` | With `--bootstrap`/`--update-tools`: show what would be installed without running |
+| `--dry-run` | With `--bootstrap`/`--update`/`--update-tools`: show what would happen without changing anything |
 | `--check-env` | Verify tool availability (exit 1 if **required** tools are missing) |
 | `--no-auto-bootstrap` | Do not auto-install missing tools on first scan |
 
@@ -167,6 +172,29 @@ This installs:
 pip3 install -e .
 bountymind --bootstrap        # same toolset via pipx/go/cargo/git
 bountymind --check-env
+```
+
+### Self-update from GitHub
+
+Use `--update` when you want the local checkout to fetch the newest BountyMind code from the official repository and refresh tools only when code actually changed:
+
+```bash
+bountymind --update
+# or compatibility alias:
+bountymin --update
+```
+
+What it does:
+- Fetches from `origin` when an upstream exists; otherwise falls back to `https://github.com/PratyushJoshi/bountymind.git`
+- Compares the current branch with its upstream (`@{u}`, falling back to `origin/main`, `origin/master`, or `FETCH_HEAD`)
+- Applies updates with a fast-forward only (`git pull --ff-only` or `git merge --ff-only FETCH_HEAD`)
+- Runs `install.sh` only if HEAD changed after the pull
+- Refuses to auto-update diverged branches to avoid overwriting local work
+
+Preview without changing anything:
+
+```bash
+bountymind --update --dry-run
 ```
 
 Advanced scanners (`smuggler`, `ppfuzz`, `x8`, `schemathesis`, `bypass-403`) are **optional** — `--check-env` will not fail if they are missing, and each scanner skips gracefully when its tool isn't present.

@@ -269,6 +269,7 @@ class ProgressManager:
   [green]bountymind -d example.com -v[/green]           Verbose output
   [green]bountymind --check-env[/green]                  Verify tool installation
   [green]bountymind --bootstrap[/green]                  Install missing tools only
+  [green]bountymind --update[/green]                     Self-update from GitHub
   [green]bountymind --update-tools[/green]               Update tools & templates
   [green]bountymind --help[/green]                       Full option list
 

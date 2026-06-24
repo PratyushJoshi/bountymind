@@ -7,7 +7,9 @@ After `pip install -e .` (or via install.sh), you can run:
     bountymind -d example.com
     bountymind -l targets.txt
     bountymind --check-env
+    bountymind --update
     bountymind --update-tools
+    bountymin --update       # compatibility alias
 """
 
 from setuptools import find_packages, setup
@@ -54,6 +56,7 @@ setup(
         # Primary CLI entrypoint — installed as 'bountymind' command
         "console_scripts": [
             "bountymind=main:cli",
+            "bountymin=main:cli",
         ],
     },
     classifiers=[
