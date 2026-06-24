@@ -18,9 +18,25 @@ Or install manually and let BountyMind bootstrap missing tools:
 
 ```bash
 pip3 install -e .
-bountymind --bootstrap       # installs pipx + go + cargo + git-based tools
-bountymind --check-env       # verify (exit 1 if required tools missing)
+bountymind --bootstrap       # checks Python/Go/git, then installs pipx + go + cargo + git-based tools
+bountymind --check-env       # verify prerequisites + tools (exit 1 if required items missing)
 ```
+
+### Prerequisites
+
+| Component | Required | Auto-installed by `install.sh` | Notes |
+|-----------|----------|----------------------------------|-------|
+| Python 3.9+ | Yes | Yes (`apt`) | Runs the framework |
+| pip / venv | Yes | Yes | Python dependencies |
+| git | Yes | Yes | Clones tools + `--update` |
+| curl or wget | Yes | Yes | Downloads Go, templates, etc. |
+| Go | Yes | Yes (`apt` or golang.org tarball) | Builds nuclei, httpx, subfinder, … |
+| apt (Debian/Ubuntu/Kali) | Yes* | — | Full installer needs `sudo ./install.sh` |
+| cargo (Rust) | No | Prompted in Step 6.5 | ppfuzz, x8 |
+| pipx | No | Yes (later steps) | Isolated Python security tools |
+
+If prerequisites are missing on Linux, run `sudo ./install.sh` or `bountymind --bootstrap`.  
+On Windows/macOS, install Python 3.9+, Go, and git manually, then use `--bootstrap` / `--check-env`.
 
 ---
 

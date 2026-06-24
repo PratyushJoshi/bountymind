@@ -58,6 +58,16 @@ class ToolStatus:
     notes: str = ""
 
 
+@dataclass
+class PrerequisiteStatus:
+    name: str
+    required: bool
+    found: bool
+    version: str = ""
+    install_hint: str = ""
+    notes: str = ""
+
+
 # Map from tool name → (go install module, apt package, version flag)
 TOOL_REGISTRY: Dict[str, Dict] = {
     "subfinder": {
@@ -334,6 +344,283 @@ class ToolUpdater:
         self._platform = platform
 
     # ------------------------------------------------------------------
+    # System prerequisites (python, go, git, …)
+    # ------------------------------------------------------------------
+
+    def check_prerequisites(self) -> List[PrerequisiteStatus]:
+        """Check core runtime prerequisites before tool bootstrap."""
+        items: List[PrerequisiteStatus] = []
+
+        py_ver = self._platform.python_version_tuple()
+        py_str = f"{py_ver[0]}.{py_ver[1]}" if py_ver else ""
+        py_ok = self._platform.python_version_ok()
+        items.append(PrerequisiteStatus(
+            name="python3 (>=3.9)",
+            required=True,
+            found=py_ok,
+            version=py_str or "missing",
+            install_hint=self._platform.apt_install_hint("python3 python3-pip python3-venv")
+            if self._platform.has_apt
+            else "Install Python 3.9+ from https://www.python.org/downloads/",
+            notes="Required to run BountyMind",
+        ))
+
+        pip_ok = self._platform.has_pip
+        items.append(PrerequisiteStatus(
+            name="pip3",
+            required=True,
+            found=pip_ok,
+            version="",
+            install_hint=self._platform.apt_install_hint("python3-pip")
+            if self._platform.has_apt
+            else "python3 -m ensurepip --upgrade",
+        ))
+
+        git_ok = self._platform.has_git
+        items.append(PrerequisiteStatus(
+            name="git",
+            required=True,
+            found=git_ok,
+            version=self._runner.get_version("git", "--version") if git_ok else "",
+            install_hint=self._platform.apt_install_hint("git")
+            if self._platform.has_apt
+            else "Install git from your package manager",
+        ))
+
+        net_ok = self._platform.has_curl or self._platform.has_wget
+        items.append(PrerequisiteStatus(
+            name="curl or wget",
+            required=True,
+            found=net_ok,
+            version="",
+            install_hint=self._platform.apt_install_hint("curl wget")
+            if self._platform.has_apt
+            else "Install curl or wget for downloads",
+        ))
+
+        go_ok = self._platform.has_go
+        items.append(PrerequisiteStatus(
+            name="go",
+            required=True,
+            found=go_ok,
+            version=self._runner.get_version("go", "version") if go_ok else "",
+            install_hint=self._platform.apt_install_hint("golang-go")
+            if self._platform.has_apt
+            else "Install Go from https://go.dev/dl/ or run: sudo ./install.sh",
+            notes="Builds nuclei, httpx, subfinder, and other Go scanners",
+        ))
+
+        items.append(PrerequisiteStatus(
+            name="cargo (rust)",
+            required=False,
+            found=self._platform.has_cargo,
+            version=self._runner.get_version("cargo", "--version") if self._platform.has_cargo else "",
+            install_hint="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y",
+            notes="Optional — needed for ppfuzz and x8",
+        ))
+
+        items.append(PrerequisiteStatus(
+            name="pipx",
+            required=False,
+            found=shutil.which("pipx") is not None,
+            version=self._runner.get_version("pipx", "--version") if shutil.which("pipx") else "",
+            install_hint=self._platform.apt_install_hint("pipx")
+            if self._platform.has_apt
+            else "python3 -m pip install --user pipx && pipx ensurepath",
+            notes="Recommended for isolated Python security tools",
+        ))
+
+        return items
+
+    def ensure_prerequisites(self, dry_run: bool = False) -> bool:
+        """
+        Install or verify system prerequisites.
+        Returns True when all required prerequisites are satisfied.
+        """
+        self._progress.print_phase("System Prerequisites")
+        statuses = self.check_prerequisites()
+        self._print_prerequisite_table(statuses)
+
+        missing_required = [s for s in statuses if s.required and not s.found]
+        if not missing_required:
+            self._progress.print_success("All required prerequisites satisfied.")
+            return True
+
+        if not self._platform.is_linux:
+            self._progress.print_error(
+                "Missing prerequisites on a non-Linux host. "
+                "Use Kali/Ubuntu/Debian and run: sudo ./install.sh"
+            )
+            for item in missing_required:
+                self._progress.print_warning(f"  {item.name}: {item.install_hint}")
+            return False
+
+        if not self._platform.has_apt:
+            self._progress.print_error(
+                "Missing prerequisites and apt is unavailable. Install manually:"
+            )
+            for item in missing_required:
+                self._progress.print_warning(f"  {item.name} → {item.install_hint}")
+            return False
+
+        if dry_run:
+            for item in missing_required:
+                self._progress.print_info(f"Would install: {item.name} ({item.install_hint})")
+            return False
+
+        self._progress.print_warning(
+            f"Missing {len(missing_required)} required prerequisite(s) — attempting apt install..."
+        )
+        packages: List[str] = []
+        need_go_tarball = False
+        for item in missing_required:
+            if item.name.startswith("python3"):
+                packages += ["python3", "python3-pip", "python3-venv"]
+            elif item.name == "pip3":
+                packages.append("python3-pip")
+            elif item.name == "git":
+                packages.append("git")
+            elif item.name.startswith("curl"):
+                packages += ["curl", "wget"]
+            elif item.name == "go":
+                packages.append("golang-go")
+                need_go_tarball = True
+
+        packages = list(dict.fromkeys(packages))
+        if packages:
+            self._runner.run(
+                tool_name="apt",
+                cmd=["sudo", "apt", "update", "-y"],
+                target="prerequisites",
+                timeout=300,
+                save_raw=False,
+                check_exists=False,
+            )
+            result = self._runner.run(
+                tool_name="apt",
+                cmd=["sudo", "apt", "install", "-y", *packages],
+                target="prerequisites",
+                timeout=600,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code != 0:
+                self._progress.print_error("apt prerequisite install failed.")
+
+        if need_go_tarball and not self._platform.has_go:
+            self._bootstrap_go_from_tarball(dry_run=False)
+
+        # Re-check after install attempt
+        statuses = self.check_prerequisites()
+        still_missing = [s.name for s in statuses if s.required and not s.found]
+        if still_missing:
+            self._progress.print_error(
+                "Prerequisites still missing after install attempt: "
+                + ", ".join(still_missing)
+            )
+            for item in statuses:
+                if item.required and not item.found:
+                    self._progress.print_warning(f"  FIX: {item.install_hint}")
+            self._progress.print_info("Or run the full installer: sudo ./install.sh")
+            return False
+
+        self._progress.print_success("Prerequisites installed successfully.")
+        return True
+
+    def verify_prerequisites(self) -> bool:
+        """Return True only when required prerequisites are present."""
+        statuses = self.check_prerequisites()
+        missing = [s for s in statuses if s.required and not s.found]
+        if not missing:
+            return True
+        self._print_prerequisite_table(statuses)
+        self._progress.print_error(
+            "Required prerequisites missing. Install before scanning:"
+        )
+        for item in missing:
+            self._progress.print_warning(f"  {item.name} → {item.install_hint}")
+        self._progress.print_info("Quick fix (Linux): sudo ./install.sh")
+        self._progress.print_info("Or try: bountymind --bootstrap")
+        return False
+
+    def _bootstrap_go_from_tarball(self, dry_run: bool = False) -> None:
+        """Install Go from golang.org tarball when apt package is unavailable."""
+        if self._platform.has_go:
+            return
+        if dry_run:
+            self._progress.print_info("Would install Go from https://go.dev/dl/")
+            return
+        if not shutil.which("wget") and not shutil.which("curl"):
+            self._progress.print_warning("Cannot install Go: need curl or wget")
+            return
+
+        self._progress.print_info("Installing Go from golang.org...")
+        archive = "go1.22.4.linux-amd64.tar.gz"
+        url = f"https://go.dev/dl/{archive}"
+        tmp = Path("/tmp") / archive
+        if shutil.which("wget"):
+            cmd = ["wget", "-q", url, "-O", str(tmp)]
+        else:
+            cmd = ["curl", "-fsSL", url, "-o", str(tmp)]
+        fetch = self._runner.run(
+            tool_name="wget",
+            cmd=cmd,
+            target="go-download",
+            timeout=180,
+            save_raw=False,
+            check_exists=False,
+        )
+        if fetch.return_code != 0 or not tmp.exists():
+            self._progress.print_warning("Go download failed")
+            return
+        if shutil.which("sudo"):
+            self._runner.run(
+                tool_name="tar",
+                cmd=["sudo", "rm", "-rf", "/usr/local/go"],
+                target="go-install",
+                timeout=30,
+                save_raw=False,
+                check_exists=False,
+            )
+            self._runner.run(
+                tool_name="tar",
+                cmd=["sudo", "tar", "-C", "/usr/local", "-xzf", str(tmp)],
+                target="go-install",
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+        else:
+            self._progress.print_warning(
+                "Go archive downloaded but sudo unavailable — extract manually to /usr/local/go"
+            )
+            return
+        tmp.unlink(missing_ok=True)
+        go_bin = "/usr/local/go/bin"
+        if go_bin not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + go_bin
+        if self._platform.has_go:
+            self._progress.print_success(f"Go installed: {self._runner.get_version('go', 'version')}")
+        else:
+            self._progress.print_warning("Go install may require a new shell (PATH=/usr/local/go/bin)")
+
+    def _print_prerequisite_table(self, statuses: List[PrerequisiteStatus]) -> None:
+        rows = []
+        for s in statuses:
+            icon = "+" if s.found else ("!" if s.required else "-")
+            rows.append([
+                s.name,
+                icon,
+                s.version or ("ok" if s.found else "missing"),
+                s.install_hint[:55] if not s.found else "ok",
+            ])
+        self._progress.print_summary_table(
+            rows,
+            ["Prerequisite", "Status", "Version", "Install hint"],
+            "System Prerequisites",
+        )
+
+    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -343,6 +630,8 @@ class ToolUpdater:
         Logs warnings for missing tools without raising errors.
         """
         log.info("Running environment health check...")
+        prereqs = self.check_prerequisites()
+        self._print_prerequisite_table(prereqs)
         statuses: List[ToolStatus] = []
 
         for tool_name, registry in TOOL_REGISTRY.items():
@@ -374,6 +663,9 @@ class ToolUpdater:
         Verify bootstrap-managed tools are callable.
         Returns True when all required tools are on PATH.
         """
+        if not self.verify_prerequisites():
+            return False
+
         required = (
             list(PYTHON_PIPX_TOOLS.keys())
             + list(GO_BOOTSTRAP_TOOLS.keys())
@@ -407,6 +699,7 @@ class ToolUpdater:
 
         if dry_run:
             self._progress.print_info("Dry-run: showing bootstrap actions only")
+            self.ensure_prerequisites(dry_run=True)
             self._ensure_pipx(dry_run=True)
             for tool, pkg in PYTHON_PIPX_TOOLS.items():
                 self._progress.print_info(f"Would pipx install: {tool} ({pkg})")
@@ -421,6 +714,12 @@ class ToolUpdater:
             self._progress.print_info("Would apt install: sqlmap")
             self._progress.print_info("Would clone SecretFinder + venv")
             self._update_nuclei_templates(dry_run=True)
+            return
+
+        if not self.ensure_prerequisites(dry_run=False):
+            self._progress.print_error(
+                "Bootstrap aborted — fix prerequisites first (sudo ./install.sh)"
+            )
             return
 
         # Python framework requirements

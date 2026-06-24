@@ -9,7 +9,8 @@
 #
 # What this does:
 #   1. Detects Kali / Ubuntu / Debian
-#   2. Installs system packages (apt)
+#   2. Checks & installs prerequisites (Python 3.9+, git, curl, Go, …)
+#   3. Installs system packages (apt)
 #   3. Installs / verifies Go
 #   4. Installs all Go-based tools
 #   5. Installs Python dependencies
@@ -34,6 +35,43 @@ header()  { echo -e "\n${BOLD}${CYAN}══════════════�
             echo -e "${BOLD}${CYAN}  $*${NC}"; \
             echo -e "${BOLD}${CYAN}══════════════════════════════════════════${NC}\n"; }
 
+have_cmd() { command -v "$1" &>/dev/null; }
+
+python_ok() {
+    have_cmd python3 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null
+}
+
+prereq_fail() {
+    error "$1"
+    echo ""
+    warn "Manual install options:"
+    echo "  • Debian/Ubuntu/Kali: sudo apt update && sudo apt install -y python3 python3-pip python3-venv git curl wget golang-go"
+    echo "  • Go (fallback):      https://go.dev/dl/  → extract to /usr/local/go"
+    echo "  • Python 3.9+:        https://www.python.org/downloads/"
+    echo "  • Then re-run:        sudo ./install.sh"
+    exit 1
+}
+
+install_go_tarball() {
+    local archive="go1.22.4.linux-amd64.tar.gz"
+    info "Downloading Go from https://go.dev/dl/$archive ..."
+    if have_cmd wget; then
+        wget -q "https://go.dev/dl/$archive" -O "/tmp/$archive" || return 1
+    elif have_cmd curl; then
+        curl -fsSL "https://go.dev/dl/$archive" -o "/tmp/$archive" || return 1
+    else
+        return 1
+    fi
+    rm -rf /usr/local/go
+    tar -C /usr/local -xzf "/tmp/$archive"
+    rm -f "/tmp/$archive"
+    export PATH="$PATH:/usr/local/go/bin"
+    PROFILE="$REAL_HOME/.bashrc"
+    grep -qxF 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' "$PROFILE" 2>/dev/null || \
+        echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> "$PROFILE"
+    have_cmd go
+}
+
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
     error "This installer needs root. Run: sudo ./install.sh"
@@ -51,6 +89,80 @@ info "Installing for   : $REAL_USER ($REAL_HOME)"
 # ── Detect distro ─────────────────────────────────────────────────────────────
 DISTRO=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"' | tr '[:upper:]' '[:lower:]')
 info "Detected distro  : $DISTRO"
+
+SUPPORTED_DISTROS=(kali ubuntu debian)
+if [[ ! " ${SUPPORTED_DISTROS[*]} " =~ " ${DISTRO} " ]]; then
+    warn "Distro '$DISTRO' is not officially tested. Kali / Ubuntu / Debian work best."
+fi
+
+# ── 0. Prerequisites ──────────────────────────────────────────────────────────
+header "Step 0 — Prerequisites (Python, git, network, Go)"
+
+if ! have_cmd apt-get; then
+    prereq_fail "apt-get not found — automated prerequisite install requires Debian/Ubuntu/Kali."
+fi
+
+info "Ensuring core packages via apt..."
+apt-get update -qq
+CORE_PREREQ=(python3 python3-pip python3-venv git curl wget)
+for pkg in "${CORE_PREREQ[@]}"; do
+    if dpkg -s "$pkg" &>/dev/null; then
+        info "  $pkg — ok"
+    else
+        info "  Installing $pkg ..."
+        apt-get install -y -qq "$pkg" || prereq_fail "Failed to install $pkg via apt."
+        success "  $pkg installed"
+    fi
+done
+
+if ! python_ok; then
+    prereq_fail "Python 3.9+ is required but 'python3' is missing or too old."
+fi
+PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")')
+success "Python $PY_VER — ok"
+
+if ! have_cmd git; then
+    prereq_fail "git is required but could not be installed."
+fi
+success "git — ok ($(git --version | head -1))"
+
+if ! have_cmd curl && ! have_cmd wget; then
+    prereq_fail "curl or wget is required for downloading tools."
+fi
+success "Network tools — ok (curl/wget)"
+
+# Go — try apt first, then official tarball
+if ! have_cmd go; then
+    warn "Go not found — installing golang-go via apt..."
+    apt-get install -y -qq golang-go || true
+fi
+if ! have_cmd go; then
+    warn "apt golang-go unavailable — trying golang.org tarball..."
+    install_go_tarball || prereq_fail "Go is required but could not be installed automatically."
+fi
+success "Go — ok ($(go version | awk '{print $3}'))"
+
+# Optional: Rust/cargo for ppfuzz and x8
+if ! have_cmd cargo; then
+    warn "cargo (Rust) not found — optional, needed for ppfuzz/x8."
+    info "  Install later with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+    info "  Or re-run this installer after rustup (Step 6.5 will pick it up)."
+else
+    success "cargo — ok ($(cargo --version))"
+fi
+
+echo ""
+info "Prerequisite summary:"
+printf "  %-22s %s\n" "python3 (>=3.9)" "$PY_VER"
+printf "  %-22s %s\n" "git" "$(git --version | awk '{print $3}')"
+NET_HINT=""
+have_cmd curl && NET_HINT+="curl "
+have_cmd wget && NET_HINT+="wget"
+NET_HINT="${NET_HINT:-missing}"
+printf "  %-22s %s\n" "curl/wget" "$NET_HINT"
+printf "  %-22s %s\n" "go" "$(go version | awk '{print $3}')"
+printf "  %-22s %s\n" "cargo (optional)" "$(have_cmd cargo && cargo --version | awk '{print $2}' || echo 'not installed')"
+echo ""
 
 # ── 1. System packages ────────────────────────────────────────────────────────
 header "Step 1/9 — System Packages (apt)"
@@ -95,17 +207,8 @@ if command -v go &>/dev/null; then
     GO_VER=$(go version | awk '{print $3}')
     success "Go already installed: $GO_VER"
 else
-    warn "Go not found — attempting install from golang.org..."
-    GO_ARCHIVE="go1.22.4.linux-amd64.tar.gz"
-    wget -q "https://go.dev/dl/$GO_ARCHIVE" -O /tmp/$GO_ARCHIVE
-    rm -rf /usr/local/go
-    tar -C /usr/local -xzf /tmp/$GO_ARCHIVE
-    rm /tmp/$GO_ARCHIVE
-    # Persist PATH for the real user
-    PROFILE="$REAL_HOME/.bashrc"
-    grep -qxF 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' "$PROFILE" || \
-        echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> "$PROFILE"
-    export PATH="$PATH:/usr/local/go/bin"
+    warn "Go not found after prerequisite step — retrying tarball install..."
+    install_go_tarball || prereq_fail "Go is still missing — check PATH or install manually."
     success "Go installed: $(go version | awk '{print $3}')"
 fi
 

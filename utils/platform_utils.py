@@ -158,6 +158,44 @@ class PlatformInfo:
     def has_cargo(self) -> bool:
         return shutil.which("cargo") is not None
 
+    @property
+    def has_python3(self) -> bool:
+        return shutil.which("python3") is not None
+
+    @property
+    def has_git(self) -> bool:
+        return shutil.which("git") is not None
+
+    @property
+    def has_curl(self) -> bool:
+        return shutil.which("curl") is not None
+
+    @property
+    def has_wget(self) -> bool:
+        return shutil.which("wget") is not None
+
+    def python_version_tuple(self) -> Optional[tuple]:
+        """Return (major, minor) for python3, or None if unavailable."""
+        if not self.has_python3:
+            return None
+        try:
+            result = subprocess.run(
+                ["python3", "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            parts = result.stdout.strip().split(".")
+            return (int(parts[0]), int(parts[1]))
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            return None
+
+    def python_version_ok(self, minimum: tuple = (3, 9)) -> bool:
+        ver = self.python_version_tuple()
+        return ver is not None and ver >= minimum
+
     # ------------------------------------------------------------------
     # Path resolution
     # ------------------------------------------------------------------
