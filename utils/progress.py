@@ -77,6 +77,7 @@ class PhaseTracker:
         ("cloud", "Cloud Bucket Recon"),
         ("screenshots", "Visual Screenshots"),
         ("waf", "WAF Detection & Evasion"),
+        ("deep-scans", "Deep Detection Scans"),
         ("reporting", "Report Generation"),
     ]
 

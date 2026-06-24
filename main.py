@@ -206,6 +206,12 @@ Safety note:
         help="Skip WAF detection and evasion scans",
     )
     parser.add_argument(
+        "--auth",
+        metavar="TOKEN",
+        default=None,
+        help="Optional authentication token to attach to the shared target context",
+    )
+    parser.add_argument(
         "--no-auto-bootstrap",
         action="store_true",
         default=False,
@@ -356,6 +362,8 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         targets=targets,
         start_time=datetime.datetime.now(datetime.timezone.utc),
     )
+    if args.auth:
+        session.auth_token = args.auth
     progress.print_info(f"Session ID: {session_id}")
     log.info("Session ID: %s | Targets: %s", session_id, targets)
 
@@ -476,17 +484,15 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
 
         if not args.skip_cloud:
             progress.set_phase_status("cloud", "running")
-            from modules.cloud_recon import CloudReconModule
-            cloud = CloudReconModule(cfg, output, runner, progress)
+            from modules.advanced_scanners import CloudBucketScanner
+            cloud = CloudBucketScanner(log, runner)
             try:
-                session.cloud_bucket_findings = cloud.run(
-                    targets, [s.domain for s in session.subdomains],
-                )
+                cloud.scan_buckets(session)
                 progress.set_phase_status(
-                    "cloud", "done", f"{len(session.cloud_bucket_findings)} buckets"
+                    "cloud", "done", f"{len(session.cloud_buckets)} buckets"
                 )
             except Exception as exc:
-                session.warnings.append(f"Cloud recon error: {exc}")
+                session.warnings.append(f"Cloud bucket scan error: {exc}")
                 progress.set_phase_status("cloud", "error")
         else:
             progress.set_phase_status("cloud", "skipped")
@@ -526,6 +532,58 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         else:
             progress.set_phase_status("waf", "skipped")
 
+        # Phase 2.7 — Deep Detection Scans
+        from modules.advanced_scanners import (
+            AdvancedNucleiScans,
+            CachePoisoningTester,
+            CORSScanner,
+            CSRFTester,
+            GraphQLFinder,
+            IDORScanner,
+            InfoDisclosure,
+            JWTScanner,
+            OAuthTester,
+            PathTraversalScanner,
+            RaceConditionTester,
+            SensitiveDirectoryScanner,
+            SSTIScanner,
+            SQLiScanner,
+            WebSocketTester,
+            XSSScanner,
+        )
+
+        progress.set_phase_status("deep-scans", "running")
+        try:
+            SQLiScanner(log, runner).scan(session)
+            XSSScanner(log, runner).scan(session)
+
+            advanced_nuclei = AdvancedNucleiScans(log, runner)
+            advanced_nuclei.scan_open_redirects(session)
+            advanced_nuclei.scan_ssrf(session)
+
+            GraphQLFinder(log, runner).find_graphql(session)
+            CORSScanner(log, runner).scan_cors(session)
+            InfoDisclosure(log, runner).scan(session)
+
+            JWTScanner(log, runner).scan(session)
+            SSTIScanner(log, runner).scan(session)
+            IDORScanner(log, runner).scan(session)
+            PathTraversalScanner(log, runner).scan(session)
+            RaceConditionTester(log, runner).scan(session)
+            CSRFTester(log, runner).scan(session)
+            WebSocketTester(log, runner).scan(session)
+            OAuthTester(log, runner).scan(session)
+            CachePoisoningTester(log, runner).scan(session)
+            SensitiveDirectoryScanner(log, runner).scan(session)
+
+            progress.set_phase_status("deep-scans", "done")
+        except Exception as exc:
+            msg = f"Deep scan phase error: {exc}"
+            log.error(msg, exc_info=True)
+            session.warnings.append(msg)
+            progress.set_phase_status("deep-scans", "error")
+            progress.print_error(msg)
+
         # Phase 3 — Reporting
         progress.set_phase_status("reporting", "running")
         from modules.reporter import ReportGenerator
@@ -557,7 +615,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             ["Evasion Findings", str(len(session.evasion_findings))],
             ["Harvested URLs",   str(len(session.harvested_urls))],
             ["JS Secrets",       str(len(session.secret_findings))],
-            ["Cloud Buckets",    str(len(session.cloud_bucket_findings))],
+            ["Cloud Buckets",    str(len(session.cloud_buckets))],
             ["Screenshots",      str(sum(1 for h in session.live_hosts if h.screenshot_path))],
             ["Manual Flags",     str(len(session.manual_flags))],
             ["Errors",           str(len(session.errors))],

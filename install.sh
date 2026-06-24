@@ -60,6 +60,7 @@ apt-get update -qq
 APT_TOOLS=(
     git curl wget unzip python3 python3-pip python3-venv
     nmap ffuf amass whatweb wafw00f
+    sqlmap
     golang-go
 )
 
@@ -145,6 +146,7 @@ go_install "github.com/PentestPad/subzy@latest"
 go_install "github.com/sensepost/gowitness@latest"
 go_install "github.com/ffuf/ffuf/v2@latest"
 go_install "github.com/owasp-amass/amass/v4/...@latest"
+go_install "github.com/hahwul/dalfox/v2@latest"
 
 echo ""
 echo "══════════════════════════════════════════"
@@ -194,12 +196,13 @@ sudo -u "$REAL_USER" env HOME="$REAL_HOME" PATH="$REAL_HOME/.local/bin:$PATH" \
 # 2. Install all Python CLI tools via pipx
 # ------------------------------------------------------------
 PYTHON_TOOLS=(
-    "cloud_enum"
     "s3scanner"
     "uro"
     "xnlinkfinder"
     "wafw00f"
     "arjun"
+    "jwt_tool"
+    "tplmap"
 )
 
 for tool in "${PYTHON_TOOLS[@]}"; do
@@ -212,6 +215,24 @@ for tool in "${PYTHON_TOOLS[@]}"; do
             echo "[+]   $tool installed"
         else
             echo "[!]   $tool install failed (non-fatal)"
+            if [[ "$tool" == "tplmap" ]]; then
+                echo "[*]   Falling back to local tplmap wrapper ..."
+                TPLMAP_DIR="$SCRIPT_DIR/tools/tplmap"
+                if [ ! -d "$TPLMAP_DIR" ]; then
+                    git clone https://github.com/epinna/tplmap.git "$TPLMAP_DIR"
+                fi
+                if [ ! -d "$TPLMAP_DIR/venv" ]; then
+                    python3 -m venv "$TPLMAP_DIR/venv"
+                    "$TPLMAP_DIR/venv/bin/pip" install -q -r "$TPLMAP_DIR/requirements.txt" || true
+                fi
+                mkdir -p "$REAL_HOME/.local/bin"
+                cat > "$REAL_HOME/.local/bin/tplmap" <<EOF
+#!/bin/bash
+"$TPLMAP_DIR/venv/bin/python" "$TPLMAP_DIR/tplmap.py" "\$@"
+EOF
+                chmod +x "$REAL_HOME/.local/bin/tplmap"
+                echo "[+]   tplmap wrapper created"
+            fi
             continue
         fi
     fi

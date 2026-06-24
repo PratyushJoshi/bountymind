@@ -116,7 +116,7 @@ logs/
 sudo ./install.sh
 ```
 
-This installs apt packages, Go tools, pip tools (wafw00f, arjun, cloud_enum), clones SecretFinder/dirsearch, updates nuclei templates, and registers `/usr/local/bin/bountymind`.
+This installs apt packages, Go tools, pip tools (wafw00f, arjun, s3scanner), clones SecretFinder/dirsearch, updates nuclei templates, and registers `/usr/local/bin/bountymind`.
 
 ### Manual pip install
 

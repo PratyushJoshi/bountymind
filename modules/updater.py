@@ -155,13 +155,6 @@ TOOL_REGISTRY: Dict[str, Dict] = {
         "version_flag": "version",
         "notes": "Web screenshot utility using a headless browser",
     },
-    "cloud_enum": {
-        "go_module": "",
-        "apt_package": "",
-        "pip_package": "cloud_enum",
-        "version_flag": "--help",
-        "notes": "Cloud bucket enumeration — AWS S3, GCP, Azure Blob",
-    },
     "secretfinder": {
         "go_module": "",
         "apt_package": "",
@@ -223,6 +216,20 @@ TOOL_REGISTRY: Dict[str, Dict] = {
         "version_flag": "version",
         "notes": "XSS parameter analyzer — manual follow-up only",
     },
+    "jwt_tool": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "jwt_tool",
+        "version_flag": "--help",
+        "notes": "JWT analysis and tamper testing utility",
+    },
+    "tplmap": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "tplmap",
+        "version_flag": "--help",
+        "notes": "Template injection detector and exploitation helper",
+    },
     "sqlmap": {
         "go_module": "",
         "apt_package": "sqlmap",
@@ -240,12 +247,13 @@ TOOL_REGISTRY: Dict[str, Dict] = {
 
 # pipx-managed Python CLIs (Kali-safe isolated installs)
 PYTHON_PIPX_TOOLS: Dict[str, str] = {
-    "cloud_enum": "cloud_enum",
     "s3scanner": "s3scanner",
     "uro": "uro",
     "xnlinkfinder": "xnlinkfinder",
     "wafw00f": "wafw00f",
     "arjun": "arjun",
+    "jwt_tool": "jwt_tool",
+    "tplmap": "tplmap",
 }
 
 # Go tools installed during full bootstrap
@@ -264,6 +272,7 @@ GO_BOOTSTRAP_TOOLS: Dict[str, str] = {
     "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest",
     "nuclei": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
     "ffuf": "github.com/ffuf/ffuf/v2@latest",
+    "dalfox": "github.com/hahwul/dalfox/v2@latest",
 }
 
 # Required binaries for verify_environment() / --check-env exit code
@@ -271,9 +280,7 @@ CORE_ENV_TOOLS: List[str] = [
     "nuclei", "httpx", "subfinder", "ffuf", "whatweb", "nmap",
 ]
 
-OPTIONAL_ENV_TOOLS: List[str] = [
-    "dalfox", "sqlmap", "trufflehog",
-]
+OPTIONAL_ENV_TOOLS: List[str] = ["dalfox", "sqlmap", "trufflehog", "jwt_tool", "tplmap"]
 
 
 class ToolUpdater:
@@ -373,6 +380,7 @@ class ToolUpdater:
                 self._progress.print_info(f"Would pipx install: {tool} ({pkg})")
             for tool, repo in GO_BOOTSTRAP_TOOLS.items():
                 self._progress.print_info(f"Would go install: {tool} ({repo})")
+            self._progress.print_info("Would apt install: sqlmap")
             self._progress.print_info("Would clone SecretFinder + venv")
             self._update_nuclei_templates(dry_run=True)
             return
@@ -393,6 +401,7 @@ class ToolUpdater:
         self._ensure_pipx(dry_run=False)
         self._bootstrap_pipx_tools(dry_run=False)
         self._bootstrap_go_tools(dry_run=False)
+        self._bootstrap_sqlmap(dry_run=False)
         self._bootstrap_secretfinder_venv(dry_run=False)
         self._update_nuclei_templates(dry_run=False)
 
@@ -487,6 +496,95 @@ class ToolUpdater:
                 self._progress.print_success(f"Installed {tool}")
             else:
                 self._progress.print_warning(f"Failed to install {tool}")
+                if tool == "tplmap":
+                    self._bootstrap_tplmap_fallback(dry_run=dry_run)
+
+    def _bootstrap_tplmap_fallback(self, dry_run: bool = False) -> None:
+        """Install tplmap from GitHub if pipx/pip installation is unavailable."""
+        tplmap_dir = Path("tools") / "tplmap"
+        venv_dir = tplmap_dir / "venv"
+        wrapper = Path.home() / ".local" / "bin" / "tplmap"
+
+        if dry_run:
+            self._progress.print_info("Would clone tplmap and create a local wrapper")
+            return
+
+        if not tplmap_dir.exists():
+            self._progress.print_info("Cloning tplmap repository...")
+            result = self._runner.run(
+                tool_name="git",
+                cmd=["git", "clone", "https://github.com/epinna/tplmap.git", str(tplmap_dir)],
+                target="tplmap",
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code != 0:
+                self._progress.print_warning("tplmap clone failed")
+                return
+
+        if not venv_dir.exists():
+            self._runner.run(
+                tool_name="python3",
+                cmd=["python3", "-m", "venv", str(venv_dir)],
+                target="tplmap-venv",
+                timeout=60,
+                save_raw=False,
+                check_exists=False,
+            )
+
+        pip_bin = venv_dir / "bin" / "pip"
+        req_file = tplmap_dir / "requirements.txt"
+        if pip_bin.exists() and req_file.exists():
+            self._runner.run(
+                tool_name="pip",
+                cmd=[str(pip_bin), "install", "-r", str(req_file)],
+                target="tplmap-deps",
+                timeout=180,
+                save_raw=False,
+                check_exists=False,
+            )
+
+        wrapper.parent.mkdir(parents=True, exist_ok=True)
+        script = (
+            "#!/bin/bash\n"
+            f"{str((venv_dir / 'bin' / 'python').resolve())} {str((tplmap_dir / 'tplmap.py').resolve())} \"$@\"\n"
+        )
+        wrapper.write_text(script, encoding="utf-8")
+        os.chmod(wrapper, 0o755)
+        self._ensure_pipx_on_path()
+        self._progress.print_success("tplmap ready (local wrapper)")
+
+    def _bootstrap_sqlmap(self, dry_run: bool = False) -> None:
+        if not self._platform.is_linux or not self._platform.has_apt:
+            return
+        if self._tool_available("sqlmap"):
+            return
+        if dry_run:
+            self._progress.print_info("Would apt install: sqlmap")
+            return
+
+        self._progress.print_info("Installing sqlmap via apt...")
+        self._runner.run(
+            tool_name="apt",
+            cmd=["sudo", "apt", "update", "-y"],
+            target="sqlmap",
+            timeout=300,
+            save_raw=False,
+            check_exists=False,
+        )
+        result = self._runner.run(
+            tool_name="apt",
+            cmd=["sudo", "apt", "install", "-y", "sqlmap"],
+            target="sqlmap",
+            timeout=300,
+            save_raw=False,
+            check_exists=False,
+        )
+        if result.return_code == 0:
+            self._progress.print_success("Installed sqlmap")
+        else:
+            self._progress.print_warning("Failed to install sqlmap")
 
     def _bootstrap_go_tools(self, dry_run: bool = False) -> None:
         if not self._platform.has_go:
@@ -617,17 +715,19 @@ class ToolUpdater:
 
     def install_advanced_tools(self, dry_run: bool = False) -> None:
         """
-        Install Python-based security tools via pip (wafw00f, arjun, cloud_enum).
+        Install Python-based security tools via pip (wafw00f, arjun, s3scanner).
         Safe to call on first run after git clone.
         """
         pip_tools = {
             "wafw00f": "wafw00f",
             "arjun": "arjun",
-            "cloud_enum": "cloud_enum",
+            "s3scanner": "s3scanner",
+            "jwt_tool": "jwt_tool",
+            "tplmap": "tplmap",
         }
         self._progress.print_phase("Installing Python Security Tools")
         for tool_name, pip_package in pip_tools.items():
-            if not self._cfg.is_tool_enabled(tool_name) and tool_name != "cloud_enum":
+            if not self._cfg.is_tool_enabled(tool_name):
                 continue
             if shutil.which(tool_name) or self._platform.resolve_binary(tool_name):
                 log.debug("%s already available", tool_name)
@@ -651,6 +751,8 @@ class ToolUpdater:
                 self._progress.print_warning(
                     f"Failed to install {tool_name}. Run manually: {hint}"
                 )
+                if tool_name == "tplmap":
+                    self._bootstrap_tplmap_fallback(dry_run=dry_run)
 
     def auto_install_missing(self, dry_run: bool = False) -> None:
         """

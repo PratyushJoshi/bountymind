@@ -356,22 +356,6 @@ class ConfigManager:
         return int(self.get("secret_scanning", "max_js_files", default=50))
 
     # ------------------------------------------------------------------
-    # Cloud bucket settings (cloud_enum)
-    # ------------------------------------------------------------------
-
-    @property
-    def cloud_recon_enabled(self) -> bool:
-        return bool(self.get("cloud_buckets", "enabled", default=True))
-
-    @property
-    def cloud_enum_threads(self) -> int:
-        return int(self.get("cloud_buckets", "threads", default=10))
-
-    @property
-    def cloud_enum_timeout(self) -> int:
-        return int(self.get("cloud_buckets", "timeout_seconds", default=300))
-
-    # ------------------------------------------------------------------
     # Screenshot settings (gowitness)
     # ------------------------------------------------------------------
 

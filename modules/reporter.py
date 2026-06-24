@@ -74,6 +74,168 @@ DEBUG_PATH_KEYWORDS = [
 ]
 
 
+def generate_manual_checklist(target: ScanSession) -> str:
+    """Build a dynamic analyst checklist from the collected findings."""
+    checklist = []
+
+    admin_flags = [
+        flag for flag in target.manual_flags
+        if flag.flag_type in {"exposed_admin_panel", "default_credentials_panel"}
+        or "admin" in flag.flag_type
+    ]
+    if admin_flags:
+        checklist.append("<h3>Admin Panels - Default Credentials</h3><ul>")
+        for flag in admin_flags:
+            url = html.escape(str(flag.target))
+            checklist.append(
+                f"<li>Visit <code>{url}</code> - try admin:admin, test weak passwords</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.graphql_endpoints:
+        checklist.append("<h3>GraphQL - Introspection & Exploitation</h3><ul>")
+        for gql in target.graphql_endpoints:
+            checklist.append(
+                f"<li><code>{html.escape(gql)}</code> - run GraphQL Voyager, test introspection</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.sqli_findings:
+        checklist.append("<h3>SQL Injection - Manual Verification</h3><ul>")
+        for sqli in target.sqli_findings[:5]:
+            parameter = html.escape(str(sqli.get("parameter", "")))
+            checklist.append(
+                f"<li>Parameter: <code>{parameter}</code> - test error-based and time-based payloads</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.xss_findings:
+        checklist.append("<h3>XSS - PoC Generation</h3><ul>")
+        for finding in target.xss_findings[:5]:
+            data = html.escape(str(finding.get("data", finding.get("url", ""))))
+            checklist.append(
+                f"<li><code>{data}</code> - craft alert-based PoCs for each context</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.open_redirects:
+        checklist.append("<h3>Open Redirect - Parameter Tampering</h3><ul>")
+        for finding in target.open_redirects[:5]:
+            matched = html.escape(str(finding.get("matched-at", finding.get("host", ""))))
+            checklist.append(
+                f"<li><code>{matched}</code> - try <code>?redirect=https://evil.com</code></li>"
+            )
+        checklist.append("</ul>")
+
+    if target.ssrf_findings:
+        checklist.append("<h3>SSRF - Internal & Cloud Metadata</h3><ul>")
+        for finding in target.ssrf_findings[:5]:
+            matched = html.escape(str(finding.get("matched-at", finding.get("host", ""))))
+            checklist.append(
+                f"<li><code>{matched}</code> - test 169.254.169.254 and cloud metadata endpoints</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.cors_misconfigs:
+        checklist.append("<h3>CORS - Origin Spoofing</h3><ul>")
+        for finding in target.cors_misconfigs[:5]:
+            matched = html.escape(str(finding.get("matched-at", finding.get("host", ""))))
+            checklist.append(
+                f"<li><code>{matched}</code> - add Origin: https://evil.example and re-test</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.jwt_tokens:
+        checklist.append("<h3>JWT Analysis</h3><ul>")
+        for token in target.jwt_tokens[:3]:
+            prefix = html.escape(token[:30] + ("..." if len(token) > 30 else ""))
+            checklist.append(
+                f"<li>Decode <code>{prefix}</code> - test alg:none, kid injection, weak secrets</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.ssti_findings:
+        checklist.append("<h3>SSTI - RCE</h3><ul>")
+        for finding in target.ssti_findings:
+            checklist.append(
+                f"<li><code>{html.escape(str(finding.get('url', '')))}</code> - test common template payloads</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.idor_findings:
+        checklist.append("<h3>IDOR - Sequential ID Enumeration</h3><ul>")
+        for finding in target.idor_findings[:5]:
+            checklist.append(
+                f"<li>Endpoint: <code>{html.escape(str(finding.get('url', '')))}</code> - change numeric IDs across accounts</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.path_traversal_findings:
+        checklist.append("<h3>Path Traversal - File Read</h3><ul>")
+        for finding in target.path_traversal_findings[:5]:
+            matched = html.escape(str(finding.get("matched-at", finding.get("host", ""))))
+            checklist.append(
+                f"<li><code>{matched}</code> - test ../etc/passwd and related traversal payloads</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.race_condition_findings:
+        checklist.append("<h3>Race Condition - Parallel Requests</h3><ul>")
+        checklist.append("<li>Use Turbo Intruder or high-concurrency ffuf to stress the vulnerable action</li>")
+        checklist.append("</ul>")
+
+    if target.csrf_findings:
+        checklist.append("<h3>CSRF - Craft PoC</h3><ul>")
+        for finding in target.csrf_findings:
+            checklist.append(
+                f"<li>Form: <code>{html.escape(str(finding.get('matched-at', finding.get('host', ''))))}</code> - generate a CSRF PoC and verify token presence</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.websocket_findings:
+        checklist.append("<h3>WebSocket - Cross-Site Hijacking</h3><ul>")
+        for finding in target.websocket_findings:
+            checklist.append(
+                f"<li><code>{html.escape(str(finding.get('matched-at', finding.get('host', ''))))}</code> - check Origin validation and auth boundaries</li>"
+            )
+        checklist.append("</ul>")
+
+    if target.oauth_findings:
+        checklist.append("<h3>OAuth - Redirect URI / CSRF</h3><ul>")
+        checklist.append("<li>Modify redirect_uri to an attacker-controlled domain and check state reuse</li>")
+        checklist.append("</ul>")
+
+    if target.cache_poisoning_findings:
+        checklist.append("<h3>Cache Poisoning</h3><ul>")
+        checklist.append("<li>Try X-Forwarded-Host and X-Forwarded-Scheme headers</li>")
+        checklist.append("</ul>")
+
+    critical = [s for s in target.sensitive_paths if s.get("sensitivity") in {"critical", "high"}]
+    if critical:
+        checklist.append("<h3>Critical Sensitive Files - Inspect Contents</h3><ul>")
+        for finding in critical[:10]:
+            url = html.escape(f"{finding['base_url']}/{finding['path']}")
+            checklist.append(
+                f"<li><a href='{url}' target='_blank' style='color:var(--red);'>{url}</a> - check for credentials and secrets</li>"
+            )
+        checklist.append("</ul>")
+
+    if any(".git" in str(item.get("path", "")) for item in target.sensitive_paths):
+        checklist.append(
+            "<h3>Exposed Git Repository</h3><ul><li>Run <code>git-dumper</code> to extract repository contents from the exposed <code>.git</code> directory</li></ul>"
+        )
+
+    checklist.append(
+        """<h3>Authentication Bypass Tests</h3><ul>
+        <li>Verb tampering: POST to GET, X-HTTP-Method-Override</li>
+        <li>Parameter pollution: <code>?admin=false&admin=true</code></li>
+        <li>JWT tokens: test <code>alg:none</code> and weak secrets</li>
+    </ul>"""
+    )
+
+    return "\n".join(checklist)
+
+
 class ManualFlagGenerator:
     """Analyzes scan results and generates ManualFlag records for the report."""
 
@@ -370,7 +532,7 @@ class ManualFlagGenerator:
                 ),
                 evidence=f"Provider: {b.provider}, Bucket: {b.bucket_name}, "
                          f"Public: {b.is_public}, Detail: {b.finding_detail[:200]}",
-                raw_data_path="output/parsed/cloud_recon/cloud_buckets.json",
+                raw_data_path="output/parsed/cloud_buckets.json",
                 analyst_steps=[
                     f"Navigate to the bucket URL: {b.url}",
                     "List bucket contents (if public listing is enabled)",
@@ -452,6 +614,7 @@ class ReportGenerator:
         self._md_data_sources(lines, session)
         self._md_authenticated_followup(lines, session)
         self._md_manual_gateways(lines, session)
+        self._md_advanced_findings(lines, session)
 
         content = "\n".join(lines)
         path = self._out.report_path(session.session_id, "markdown")
@@ -515,6 +678,19 @@ class ReportGenerator:
             f"| Visual Screenshots | {sum(1 for h in s.live_hosts if h.screenshot_path)} captured |",
             f"| WAF Endpoints | {len(s.waf_detections)} protected endpoints |",
             f"| WAF Evasion Findings | {len(s.evasion_findings)} bypass discoveries |",
+            "",
+            "<div class='metrics-grid'>",
+            f"<div class='metric-card'><h3>Sensitive Paths</h3><div class='value'>{len(s.sensitive_paths)}</div></div>",
+            f"<div class='metric-card'><h3>SQLi</h3><div class='value'>{len(s.sqli_findings)}</div></div>",
+            f"<div class='metric-card'><h3>XSS</h3><div class='value'>{len(s.xss_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Open Redirect</h3><div class='value'>{len(s.open_redirects)}</div></div>",
+            f"<div class='metric-card'><h3>SSRF</h3><div class='value'>{len(s.ssrf_findings)}</div></div>",
+            f"<div class='metric-card'><h3>JWT Tokens</h3><div class='value'>{len(s.jwt_tokens)}</div></div>",
+            f"<div class='metric-card'><h3>SSTI</h3><div class='value'>{len(s.ssti_findings)}</div></div>",
+            f"<div class='metric-card'><h3>IDOR</h3><div class='value'>{len(s.idor_findings)}</div></div>",
+            f"<div class='metric-card'><h3>CSRF</h3><div class='value'>{len(s.csrf_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Cache Poison</h3><div class='value'>{len(s.cache_poisoning_findings)}</div></div>",
+            "</div>",
             "",
             f"**{len(s.manual_flags)} items** were flagged for manual analyst validation "
             f"(see _Potential Manual Verification & Exploitation Gateways_ section).",
@@ -815,7 +991,7 @@ class ReportGenerator:
             "| katana | Open/Free | Active web crawler (depth-limited, non-intrusive) |",
             "| subzy | Open/Free | Active subdomain takeover verification |",
             "| gowitness | Open/Free | Visual reconnaissance screenshots |",
-            "| cloud_enum | Open/Free | Cloud bucket enumeration (S3, GCP, Azure, DO) |",
+            "| s3scanner | Open/Free | Cloud bucket enumeration (S3) with HTTP fallback for AWS/Azure/GCP |",
             "| arjun | Open/Free | HTTP parameter discovery for WAF evasion |",
             "| wafw00f | Open/Free | Web Application Firewall fingerprinting |",
             "| Shodan | Free-tier/Optional | Used only if SHODAN API key configured |",
@@ -878,6 +1054,7 @@ class ReportGenerator:
         if not s.manual_flags:
             lines += ["_No manual verification items at this time._", ""]
             return
+        lines.append(generate_manual_checklist(s))
         for i, flag in enumerate(s.manual_flags, 1):
             sev_emoji = {
                 "critical": "🔴", "high": "🟠", "medium": "🟡",
@@ -910,6 +1087,139 @@ class ReportGenerator:
                 lines.append(f"- {step}")
             lines += ["", "---" if i < len(s.manual_flags) else "", ""]
 
+    def _md_advanced_findings(self, lines: List[str], s: ScanSession) -> None:
+        """Render the new advanced finding sections at the end of the report."""
+
+        def section(title: str, body: str) -> None:
+            lines.extend([f"## {title}", "", body, "", "---", ""])
+
+        if s.sensitive_paths:
+            rows = [
+                "<table><thead><tr><th>Base URL</th><th>Path</th><th>Status</th><th>Sensitivity</th></tr></thead><tbody>",
+            ]
+            for item in s.sensitive_paths:
+                rows.append(
+                    f"<tr><td>{html.escape(str(item.get('base_url', '')))}</td><td class='code'>/{html.escape(str(item.get('path', '')))}</td><td>{item.get('status', '')}</td><td style='color:var(--red);'>{str(item.get('sensitivity', 'low')).upper()}</td></tr>"
+                )
+            rows.append("</tbody></table>")
+            section("14. Sensitive Files & Directories", "\n".join(rows))
+
+        if s.sqli_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.sqli_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('domain', item.get('url', ''))))}</code> - {html.escape(str(item.get('output', item)))}</li>")
+            rows.append("</ul>")
+            section("15. SQL Injection", "\n".join(rows))
+
+        if s.xss_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.xss_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('url', item.get('matched-at', ''))))}</code> - {html.escape(str(item.get('payload', item.get('data', item))))}</li>")
+            rows.append("</ul>")
+            section("16. Cross-Site Scripting", "\n".join(rows))
+
+        if s.open_redirects:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.open_redirects[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("17. Open Redirects", "\n".join(rows))
+
+        if s.ssrf_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.ssrf_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("18. SSRF", "\n".join(rows))
+
+        if s.graphql_endpoints:
+            rows = ["<ul class='findings-list'>"]
+            for endpoint in s.graphql_endpoints:
+                rows.append(f"<li><code>{html.escape(endpoint)}</code></li>")
+            rows.append("</ul>")
+            section("19. GraphQL Endpoints", "\n".join(rows))
+
+        if s.cors_misconfigs:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.cors_misconfigs[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("20. CORS Misconfigurations", "\n".join(rows))
+
+        if s.jwt_tokens or s.jwt_issues:
+            rows = ["<ul class='findings-list'>"]
+            for token in s.jwt_tokens[:10]:
+                rows.append(f"<li><code>{html.escape(token[:60] + ('...' if len(token) > 60 else ''))}</code></li>")
+            for issue in s.jwt_issues[:10]:
+                rows.append(f"<li>{html.escape(str(issue.get('output', issue)))}</li>")
+            rows.append("</ul>")
+            section("21. JWT Analysis", "\n".join(rows))
+
+        if s.ssti_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.ssti_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('url', '')))}</code></li>")
+            rows.append("</ul>")
+            section("22. SSTI Findings", "\n".join(rows))
+
+        if s.idor_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.idor_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('url', '')))}</code></li>")
+            rows.append("</ul>")
+            section("23. IDOR Findings", "\n".join(rows))
+
+        if s.path_traversal_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.path_traversal_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("24. Path Traversal", "\n".join(rows))
+
+        if s.csrf_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.csrf_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("25. CSRF Findings", "\n".join(rows))
+
+        if s.websocket_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.websocket_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("26. WebSocket Findings", "\n".join(rows))
+
+        if s.oauth_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.oauth_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("27. OAuth Findings", "\n".join(rows))
+
+        if s.cache_poisoning_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.cache_poisoning_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('matched-at', item.get('host', ''))))}</code></li>")
+            rows.append("</ul>")
+            section("28. Cache Poisoning", "\n".join(rows))
+
+        if s.info_disclosures:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.info_disclosures[:50]:
+                rows.append(
+                    f"<li><code>{html.escape(str(item.get('url', '')))}</code> - {html.escape(str(item.get('path', '')))} (status {item.get('status', '')})</li>"
+                )
+            rows.append("</ul>")
+            section("29. Information Disclosures", "\n".join(rows))
+
+        if s.race_condition_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.race_condition_findings[:50]:
+                rows.append(f"<li><code>{html.escape(str(item.get('url', '')))}</code></li>")
+            rows.append("</ul>")
+            section("30. Race Conditions", "\n".join(rows))
+
     # ------------------------------------------------------------------
     # HTML report
     # ------------------------------------------------------------------
@@ -937,6 +1247,7 @@ class ReportGenerator:
         self._md_data_sources(md_lines, session)
         self._md_authenticated_followup(md_lines, session)
         self._md_manual_gateways(md_lines, session)
+        self._md_advanced_findings(md_lines, session)
 
         md_content = "\n".join(md_lines)
 
@@ -977,6 +1288,11 @@ class ReportGenerator:
   th {{ background: #161b22; color: #58a6ff; padding: 0.5rem; text-align: left; border: 1px solid #30363d; }}
   td {{ padding: 0.4rem 0.5rem; border: 1px solid #21262d; vertical-align: top; }}
   tr:nth-child(even) {{ background: #161b22; }}
+    .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin: 1rem 0 1.5rem; }}
+    .metric-card {{ background: linear-gradient(180deg, #161b22, #0d1117); border: 1px solid #30363d; border-radius: 10px; padding: 0.9rem 1rem; box-shadow: 0 6px 20px rgba(0,0,0,0.15); }}
+    .metric-card h3 {{ margin: 0 0 0.35rem; font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .metric-card .value {{ font-size: 1.7rem; font-weight: 700; color: #f0f6fc; line-height: 1; }}
+    .findings-list {{ margin: 0.75rem 0 0; padding-left: 1.2rem; }}
   code, pre {{ background: #161b22; padding: 0.2rem 0.4rem; border-radius: 4px;
                font-family: 'Courier New', monospace; color: #a5d6ff; }}
   pre {{ padding: 1rem; overflow-x: auto; }}

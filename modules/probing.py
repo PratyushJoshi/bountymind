@@ -54,6 +54,7 @@ from utils.models import DirectoryFinding, LiveHost, PortService, SubdomainRecor
 from utils.output_helpers import OutputManager, parse_line_delimited
 from utils.progress import ProgressManager
 from utils.runner import CommandRunner
+from utils.wordlists import get_wordlist
 
 log = get_logger("probing")
 
@@ -446,7 +447,7 @@ class ProbingModule:
 
     def _discover_dirs(self, urls: List[str]) -> List[DirectoryFinding]:
         """Run directory/file discovery on live URLs."""
-        wordlist = self._cfg.dir_wordlist
+        wordlist = get_wordlist("directories", "config/common_dirs.txt")
         if not wordlist:
             log.warning("No valid wordlist found; skipping directory discovery")
             self._progress.print_warning(

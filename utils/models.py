@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ class CloudBucketFinding:
     url: str
     is_public: bool = True
     finding_detail: str = ""
-    source_tool: str = "cloud_enum"
+    source_tool: str = "cloudbucketscanner"
     timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
@@ -236,7 +236,7 @@ class ToolResult:
 
 
 @dataclass
-class ScanSession:
+class TargetContext:
     """Top-level container for a full scan session's results."""
 
     session_id: str
@@ -254,6 +254,27 @@ class ScanSession:
     harvested_urls: List[HarvestedURL] = field(default_factory=list)
     secret_findings: List[SecretFinding] = field(default_factory=list)
     cloud_bucket_findings: List[CloudBucketFinding] = field(default_factory=list)
+    jwt_tokens: List[str] = field(default_factory=list)
+    jwt_issues: List[Dict[str, Any]] = field(default_factory=list)
+    ssti_findings: List[Dict[str, Any]] = field(default_factory=list)
+    xxe_findings: List[Dict[str, Any]] = field(default_factory=list)
+    deserialization_findings: List[Dict[str, Any]] = field(default_factory=list)
+    path_traversal_findings: List[Dict[str, Any]] = field(default_factory=list)
+    csrf_findings: List[Dict[str, Any]] = field(default_factory=list)
+    race_condition_findings: List[Dict[str, Any]] = field(default_factory=list)
+    oauth_findings: List[Dict[str, Any]] = field(default_factory=list)
+    websocket_findings: List[Dict[str, Any]] = field(default_factory=list)
+    cache_poisoning_findings: List[Dict[str, Any]] = field(default_factory=list)
+    idor_findings: List[Dict[str, Any]] = field(default_factory=list)
+    sqli_findings: List[Dict[str, Any]] = field(default_factory=list)
+    xss_findings: List[Dict[str, Any]] = field(default_factory=list)
+    open_redirects: List[Dict[str, Any]] = field(default_factory=list)
+    ssrf_findings: List[Dict[str, Any]] = field(default_factory=list)
+    cors_misconfigs: List[Dict[str, Any]] = field(default_factory=list)
+    graphql_endpoints: List[str] = field(default_factory=list)
+    info_disclosures: List[Dict[str, Any]] = field(default_factory=list)
+    sensitive_paths: List[Dict[str, Any]] = field(default_factory=list)
+    auth_token: Optional[str] = None
     # --- WAF detection & evasion results ---
     waf_detections: Dict[str, str] = field(default_factory=dict)   # url → waf_name
     evasion_findings: List[EvasionFinding] = field(default_factory=list)
@@ -265,3 +286,25 @@ class ScanSession:
         if self.end_time:
             return self.end_time - self.start_time
         return None
+
+    @property
+    def domain(self) -> str:
+        return self.targets[0] if self.targets else "target"
+
+    @domain.setter
+    def domain(self, value: str) -> None:
+        if self.targets:
+            self.targets[0] = value
+        else:
+            self.targets = [value]
+
+    @property
+    def cloud_buckets(self) -> List[CloudBucketFinding]:
+        return self.cloud_bucket_findings
+
+    @cloud_buckets.setter
+    def cloud_buckets(self, value: List[CloudBucketFinding]) -> None:
+        self.cloud_bucket_findings = value
+
+
+ScanSession = TargetContext

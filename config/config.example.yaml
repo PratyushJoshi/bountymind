@@ -185,12 +185,6 @@ tools:
     binary: "gowitness"
     path: ""
 
-  cloud_enum:
-    enabled: true
-    source: "pip"
-    binary: "cloud_enum"
-    path: ""
-
   secretfinder:
     # SecretFinder is a Python script cloned from GitHub
     enabled: true
@@ -392,19 +386,8 @@ secret_scanning:
   # Maximum JS files to scan per session (avoid unbounded scanning)
   max_js_files: 50
 
-# -----------------------------------------------------------------------------
-# CLOUD BUCKET ENUMERATION (cloud_enum)
-# Tool: https://github.com/initstring/cloud_enum
-# Classification: Open/Free (pip package)
-# Enumerates AWS S3, GCP, Azure Blob, and other cloud storage surfaces
-# Only checks for publicly accessible/misconfigured buckets (passive)
-# Does NOT attempt to read/write bucket contents
-# -----------------------------------------------------------------------------
 cloud_buckets:
   enabled: true
-
-  # Concurrent cloud_enum threads (keep moderate to avoid rate limits)
-  threads: 10
 
   # Timeout for cloud enumeration (seconds)
   timeout_seconds: 300

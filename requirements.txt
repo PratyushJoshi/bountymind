@@ -17,8 +17,6 @@ typing-extensions==4.9.0
 wafw00f>=2.2.0
 arjun>=2.2.1
 
-# Optional cloud recon (installed by --bootstrap / install.sh)
-cloud_enum>=0.5
 s3scanner>=1.0.0
 uro>=1.0.0
 xnlinkfinder>=1.0.0

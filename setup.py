@@ -42,7 +42,6 @@ setup(
             # Optional Python-based security tools
             "wafw00f>=2.2.0",
             "arjun>=2.2.1",
-            "cloud_enum>=0.5",
         ],
         "dev": [
             "pytest>=7.0",

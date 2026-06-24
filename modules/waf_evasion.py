@@ -25,11 +25,12 @@ from utils.models import EvasionFinding, LiveHost, ScanSession
 from utils.output_helpers import OutputManager
 from utils.progress import ProgressManager
 from utils.runner import CommandRunner
+from utils.wordlists import get_wordlist
 
 log = get_logger("waf_evasion")
 
 # Bundled wordlist for WAF evasion directory fuzzing
-COMMON_DIRS = Path(__file__).parent.parent / "config" / "common_dirs.txt"
+COMMON_DIRS = Path(get_wordlist("directories", "config/common_dirs.txt"))
 
 
 class WAFEvasion:
