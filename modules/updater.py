@@ -26,9 +26,12 @@ Safety:
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
-from dataclasses import dataclass, field
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from utils.config_manager import ConfigManager
@@ -175,7 +178,102 @@ TOOL_REGISTRY: Dict[str, Dict] = {
         "version_flag": "--help",
         "notes": "HTTP parameter discovery — used for WAF evasion parameter mining",
     },
+    "s3scanner": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "s3scanner",
+        "version_flag": "--help",
+        "notes": "S3 bucket misconfiguration scanner",
+    },
+    "uro": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "uro",
+        "version_flag": "--help",
+        "notes": "URL deduplication and filtering utility",
+    },
+    "xnlinkfinder": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "xnlinkfinder",
+        "version_flag": "--help",
+        "notes": "Extract endpoints and parameters from JS/HTML",
+    },
+    "cdncheck": {
+        "go_module": "github.com/projectdiscovery/cdncheck/cmd/cdncheck",
+        "apt_package": "",
+        "version_flag": "-version",
+        "notes": "CDN/WAF provider detection helper",
+    },
+    "shuffledns": {
+        "go_module": "github.com/projectdiscovery/shuffledns/cmd/shuffledns",
+        "apt_package": "",
+        "version_flag": "-version",
+        "notes": "Mass DNS brute-force wrapper (disabled in safe mode by default)",
+    },
+    "notify": {
+        "go_module": "github.com/projectdiscovery/notify/cmd/notify",
+        "apt_package": "",
+        "version_flag": "-version",
+        "notes": "Notification dispatcher for scan output",
+    },
+    "dalfox": {
+        "go_module": "github.com/hahwul/dalfox/v2",
+        "apt_package": "",
+        "version_flag": "version",
+        "notes": "XSS parameter analyzer — manual follow-up only",
+    },
+    "sqlmap": {
+        "go_module": "",
+        "apt_package": "sqlmap",
+        "version_flag": "--version",
+        "notes": "SQL injection tool — not run automatically; env check only",
+    },
+    "trufflehog": {
+        "go_module": "",
+        "apt_package": "",
+        "pip_package": "truffleHog",
+        "version_flag": "--help",
+        "notes": "Secret scanning — optional manual follow-up",
+    },
 }
+
+# pipx-managed Python CLIs (Kali-safe isolated installs)
+PYTHON_PIPX_TOOLS: Dict[str, str] = {
+    "cloud_enum": "cloud_enum",
+    "s3scanner": "s3scanner",
+    "uro": "uro",
+    "xnlinkfinder": "xnlinkfinder",
+    "wafw00f": "wafw00f",
+    "arjun": "arjun",
+}
+
+# Go tools installed during full bootstrap
+GO_BOOTSTRAP_TOOLS: Dict[str, str] = {
+    "gau": "github.com/lc/gau/v2/cmd/gau@latest",
+    "waybackurls": "github.com/tomnomnom/waybackurls@latest",
+    "katana": "github.com/projectdiscovery/katana/cmd/katana@latest",
+    "subzy": "github.com/PentestPad/subzy@latest",
+    "gowitness": "github.com/sensepost/gowitness@latest",
+    "cdncheck": "github.com/projectdiscovery/cdncheck/cmd/cdncheck@latest",
+    "naabu": "github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+    "dnsx": "github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+    "shuffledns": "github.com/projectdiscovery/shuffledns/cmd/shuffledns@latest",
+    "notify": "github.com/projectdiscovery/notify/cmd/notify@latest",
+    "subfinder": "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "httpx": "github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "nuclei": "github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+    "ffuf": "github.com/ffuf/ffuf/v2@latest",
+}
+
+# Required binaries for verify_environment() / --check-env exit code
+CORE_ENV_TOOLS: List[str] = [
+    "nuclei", "httpx", "subfinder", "ffuf", "whatweb", "nmap",
+]
+
+OPTIONAL_ENV_TOOLS: List[str] = [
+    "dalfox", "sqlmap", "trufflehog",
+]
 
 
 class ToolUpdater:
@@ -232,6 +330,291 @@ class ToolUpdater:
         self._print_status_table(statuses)
         return statuses
 
+    def verify_environment(self) -> bool:
+        """
+        Verify bootstrap-managed tools are callable.
+        Returns True when all required tools are on PATH.
+        """
+        required = (
+            list(PYTHON_PIPX_TOOLS.keys())
+            + list(GO_BOOTSTRAP_TOOLS.keys())
+            + CORE_ENV_TOOLS
+        )
+        missing = [t for t in required if not self._tool_available(t)]
+        optional_missing = [t for t in OPTIONAL_ENV_TOOLS if not self._tool_available(t)]
+
+        if missing:
+            log.warning("Missing required tools: %s", ", ".join(missing))
+            self._progress.print_error(
+                f"Missing required tools: {', '.join(missing)}"
+            )
+            self._progress.print_info("Run: bountymind --bootstrap")
+            return False
+
+        if optional_missing:
+            log.info("Optional tools not installed: %s", ", ".join(optional_missing))
+            self._progress.print_warning(
+                f"Optional tools not installed: {', '.join(optional_missing)}"
+            )
+
+        log.info("Environment check passed. All required tools available.")
+        self._progress.print_success("Environment check passed. All required tools available.")
+        return True
+
+    def bootstrap_all_tools(self, dry_run: bool = False) -> None:
+        """One-shot installation of all external dependencies."""
+        self._progress.print_phase("Bootstrapping All Reconnaissance Tools")
+        log.info("Bootstrapping all required reconnaissance tools...")
+
+        if dry_run:
+            self._progress.print_info("Dry-run: showing bootstrap actions only")
+            self._ensure_pipx(dry_run=True)
+            for tool, pkg in PYTHON_PIPX_TOOLS.items():
+                self._progress.print_info(f"Would pipx install: {tool} ({pkg})")
+            for tool, repo in GO_BOOTSTRAP_TOOLS.items():
+                self._progress.print_info(f"Would go install: {tool} ({repo})")
+            self._progress.print_info("Would clone SecretFinder + venv")
+            self._update_nuclei_templates(dry_run=True)
+            return
+
+        # Python framework requirements
+        req_file = Path(__file__).parent.parent / "requirements.txt"
+        if req_file.exists() and self._platform.has_pip:
+            self._progress.print_info("Installing Python requirements...")
+            self._runner.run(
+                tool_name="pip3",
+                cmd=["pip3", "install", "-q", "-r", str(req_file)],
+                target="requirements",
+                timeout=300,
+                save_raw=False,
+                check_exists=False,
+            )
+
+        self._ensure_pipx(dry_run=False)
+        self._bootstrap_pipx_tools(dry_run=False)
+        self._bootstrap_go_tools(dry_run=False)
+        self._bootstrap_secretfinder_venv(dry_run=False)
+        self._update_nuclei_templates(dry_run=False)
+
+        log.info("Bootstrap finished. All tools installed.")
+        self._progress.print_success("Bootstrap finished. Run `bountymind --check-env` to verify.")
+
+    def _tool_available(self, name: str) -> bool:
+        return bool(self._platform.resolve_binary(name) or shutil.which(name))
+
+    def _ensure_pipx_on_path(self) -> None:
+        pipx_bin = Path.home() / ".local" / "bin"
+        current = os.environ.get("PATH", "")
+        if pipx_bin.exists() and str(pipx_bin) not in current:
+            os.environ["PATH"] = current + os.pathsep + str(pipx_bin)
+
+    def _ensure_pipx(self, dry_run: bool = False) -> None:
+        if shutil.which("pipx"):
+            self._ensure_pipx_on_path()
+            return
+        if not self._platform.is_linux or not self._platform.has_apt:
+            log.debug("pipx not available; falling back to pip3 for Python tools")
+            return
+
+        self._progress.print_info("Installing pipx (Kali-safe Python tool isolation)...")
+        if dry_run:
+            return
+
+        self._runner.run(
+            tool_name="apt",
+            cmd=["sudo", "apt", "update", "-y"],
+            target="pipx",
+            timeout=300,
+            save_raw=False,
+            check_exists=False,
+        )
+        result = self._runner.run(
+            tool_name="apt",
+            cmd=["sudo", "apt", "install", "-y", "pipx"],
+            target="pipx",
+            timeout=300,
+            save_raw=False,
+            check_exists=False,
+        )
+        if result.return_code == 0:
+            self._ensure_pipx_on_path()
+            self._progress.print_success("pipx installed")
+        else:
+            self._progress.print_warning("pipx install failed; using pip3 fallback")
+
+    def _bootstrap_pipx_tools(self, dry_run: bool = False) -> None:
+        use_pipx = shutil.which("pipx") is not None
+        self._progress.print_phase("Python Security Tools")
+
+        for tool, pkg in PYTHON_PIPX_TOOLS.items():
+            if self._tool_available(tool):
+                if use_pipx and not dry_run:
+                    self._runner.run(
+                        tool_name="pipx",
+                        cmd=["pipx", "upgrade", pkg],
+                        target=tool,
+                        timeout=120,
+                        save_raw=False,
+                        check_exists=False,
+                    )
+                continue
+
+            if dry_run:
+                self._progress.print_info(f"Would install {tool}")
+                continue
+
+            self._progress.print_info(f"Installing {tool}...")
+            if use_pipx:
+                result = self._runner.run(
+                    tool_name="pipx",
+                    cmd=["pipx", "install", pkg],
+                    target=tool,
+                    timeout=300,
+                    save_raw=False,
+                    check_exists=False,
+                )
+            else:
+                result = self._runner.run(
+                    tool_name="pip3",
+                    cmd=["pip3", "install", "-q", pkg],
+                    target=tool,
+                    timeout=300,
+                    save_raw=False,
+                    check_exists=False,
+                )
+
+            if result.return_code == 0:
+                self._progress.print_success(f"Installed {tool}")
+            else:
+                self._progress.print_warning(f"Failed to install {tool}")
+
+    def _bootstrap_go_tools(self, dry_run: bool = False) -> None:
+        if not self._platform.has_go:
+            self._progress.print_warning("Go not found — skipping Go tool bootstrap")
+            return
+
+        self._progress.print_phase("Go Security Tools")
+        go_bin = self._platform.go_bin_dir or (Path.home() / "go" / "bin")
+
+        for tool, repo in GO_BOOTSTRAP_TOOLS.items():
+            if self._tool_available(tool):
+                continue
+            if dry_run:
+                self._progress.print_info(f"Would go install {tool}")
+                continue
+
+            self._progress.print_info(f"go installing {tool}...")
+            result = self._runner.run(
+                tool_name="go-install",
+                cmd=["go", "install", "-v", repo],
+                target=tool,
+                timeout=600,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code == 0:
+                self._promote_go_binary(tool, go_bin)
+                self._progress.print_success(f"Installed {tool}")
+            else:
+                self._progress.print_warning(f"Failed to install {tool}")
+
+    def _promote_go_binary(self, tool: str, go_bin: Path) -> None:
+        """Copy a Go-built binary onto PATH (~/.local/bin, then /usr/local/bin)."""
+        src = go_bin / tool
+        if not src.exists():
+            resolved = self._platform.resolve_binary(tool)
+            if resolved:
+                src = Path(resolved)
+            else:
+                return
+
+        local_bin = Path.home() / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        dest = local_bin / tool
+        try:
+            shutil.copy2(src, dest)
+            os.chmod(dest, 0o755)
+            self._ensure_pipx_on_path()
+        except OSError as exc:
+            log.debug("Could not copy %s to ~/.local/bin: %s", tool, exc)
+
+        system_dest = Path(f"/usr/local/bin/{tool}")
+        if system_dest.exists() or not shutil.which("sudo"):
+            return
+        try:
+            subprocess.run(
+                ["sudo", "cp", str(src), str(system_dest)],
+                check=False,
+                timeout=30,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["sudo", "chmod", "+x", str(system_dest)],
+                check=False,
+                timeout=10,
+                capture_output=True,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def _bootstrap_secretfinder_venv(self, dry_run: bool = False) -> None:
+        secretfinder_dir = Path(
+            self._cfg.get(
+                "secret_scanning", "secretfinder_path",
+                default="tools/SecretFinder/SecretFinder.py",
+            )
+        ).parent
+
+        script_path = secretfinder_dir / "SecretFinder.py"
+        if script_path.exists():
+            return
+
+        if dry_run:
+            self._progress.print_info(f"Would clone SecretFinder to {secretfinder_dir}")
+            return
+
+        self._progress.print_info("Cloning SecretFinder...")
+        secretfinder_dir.parent.mkdir(parents=True, exist_ok=True)
+        result = self._runner.run(
+            tool_name="git",
+            cmd=[
+                "git", "clone",
+                "https://github.com/m4ll0k/SecretFinder.git",
+                str(secretfinder_dir),
+            ],
+            target="secretfinder",
+            timeout=120,
+            save_raw=False,
+            check_exists=False,
+        )
+        if result.return_code != 0:
+            self._progress.print_warning("SecretFinder clone failed")
+            return
+
+        venv_dir = secretfinder_dir / "venv"
+        if not venv_dir.exists():
+            self._runner.run(
+                tool_name="python3",
+                cmd=["python3", "-m", "venv", str(venv_dir)],
+                target="secretfinder-venv",
+                timeout=60,
+                save_raw=False,
+                check_exists=False,
+            )
+
+        pip_bin = venv_dir / "bin" / "pip"
+        req_file = secretfinder_dir / "requirements.txt"
+        if pip_bin.exists() and req_file.exists():
+            self._runner.run(
+                tool_name="pip",
+                cmd=[str(pip_bin), "install", "-r", str(req_file)],
+                target="secretfinder-deps",
+                timeout=180,
+                save_raw=False,
+                check_exists=False,
+            )
+            self._progress.print_success("SecretFinder ready (venv)")
+
     def install_advanced_tools(self, dry_run: bool = False) -> None:
         """
         Install Python-based security tools via pip (wafw00f, arjun, cloud_enum).
@@ -271,60 +654,12 @@ class ToolUpdater:
 
     def auto_install_missing(self, dry_run: bool = False) -> None:
         """
-        Bootstrap missing tools after git clone — installs pip tools, Go tools,
-        and refreshes nuclei templates without requiring manual install.sh.
+        Lightweight auto-install on first scan — delegates to bootstrap subset.
         """
-        self._progress.print_phase("Auto-Bootstrap (missing tools)")
-        log.info("Running auto-install for missing tools...")
-
-        # 1. Python requirements
-        from pathlib import Path as _Path
-        req_file = _Path(__file__).parent.parent / "requirements.txt"
-        if req_file.exists() and not dry_run and self._platform.has_pip:
-            self._progress.print_info("Installing Python requirements...")
-            self._runner.run(
-                tool_name="pip3",
-                cmd=["pip3", "install", "-q", "-r", str(req_file)],
-                target="requirements",
-                timeout=300,
-                save_raw=False,
-                check_exists=False,
-            )
-
-        # 2. Pip-based security tools
-        self.install_advanced_tools(dry_run=dry_run)
-
-        # 3. Go-based tools (if go is available)
-        if self._platform.has_go and not dry_run:
-            for tool_name, registry in TOOL_REGISTRY.items():
-                if not self._cfg.is_tool_enabled(tool_name):
-                    continue
-                if registry.get("go_module") and not registry.get("pip_package"):
-                    binary = self._cfg.get_tool_binary(tool_name)
-                    if self._platform.resolve_binary(binary) or shutil.which(binary):
-                        continue
-                    module = registry["go_module"]
-                    self._progress.print_info(f"Installing {tool_name} via go install...")
-                    result = self._runner.run(
-                        tool_name="go-install",
-                        cmd=["go", "install", f"{module}@latest"],
-                        target=tool_name,
-                        timeout=300,
-                        save_raw=False,
-                        check_exists=False,
-                    )
-                    if result.return_code == 0:
-                        self._progress.print_success(f"Installed {tool_name}")
-
-        # 4. SecretFinder clone
-        if self._cfg.secret_scanning_enabled:
-            self.ensure_secretfinder(dry_run)
-
-        # 5. Nuclei templates
-        self._update_nuclei_templates(dry_run)
-
-        if not dry_run:
-            self._progress.print_success("Auto-bootstrap complete")
+        if dry_run:
+            self.bootstrap_all_tools(dry_run=True)
+            return
+        self.bootstrap_all_tools(dry_run=False)
 
     def update_tools(self, dry_run: bool = False) -> None:
         """
@@ -475,51 +810,18 @@ class ToolUpdater:
 
     def ensure_secretfinder(self, dry_run: bool = False) -> bool:
         """
-        Clone SecretFinder from GitHub if not present.
-        Safe: read-only git clone + pip install of its requirements.
+        Clone SecretFinder from GitHub if not present (venv-isolated deps).
         Returns True if SecretFinder is available after this call.
         """
         from pathlib import Path as _Path
         dest = _Path(self._cfg.get("secret_scanning", "secretfinder_path",
                                     default="tools/SecretFinder/SecretFinder.py"))
-        repo_dir = dest.parent
 
         if dest.exists():
             log.debug("SecretFinder already present at %s", dest)
             return True
 
-        if dry_run:
-            self._progress.print_info(
-                f"Would clone SecretFinder to {repo_dir}"
-            )
-            return False
-
-        self._progress.print_info("Cloning SecretFinder from GitHub...")
-        log.info("Cloning SecretFinder to %s", repo_dir)
-        result = self._runner.run(
-            tool_name="git",
-            cmd=["git", "clone", "https://github.com/m4ll0k/SecretFinder.git",
-                 str(repo_dir)],
-            target="secretfinder",
-            timeout=60,
-            save_raw=False,
-            check_exists=False,
-        )
-        if result.return_code != 0:
-            log.warning("SecretFinder clone failed: %s", result.stderr[:200])
-            return False
-
-        req_file = repo_dir / "requirements.txt"
-        if req_file.exists():
-            self._runner.run(
-                tool_name="pip3",
-                cmd=["pip3", "install", "-r", str(req_file)],
-                target="secretfinder-deps",
-                timeout=120,
-                save_raw=False,
-                check_exists=False,
-            )
-
+        self._bootstrap_secretfinder_venv(dry_run)
         return dest.exists()
 
     # ------------------------------------------------------------------

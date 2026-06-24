@@ -137,7 +137,7 @@ Safety note:
         "--bootstrap",
         action="store_true",
         default=False,
-        help="Auto-install missing tools (pip/go) then exit unless targets given",
+        help="Install all external tools (pipx, go, SecretFinder venv) then exit unless targets given",
     )
     parser.add_argument(
         "--update-tools",
@@ -155,7 +155,7 @@ Safety note:
         "--check-env",
         action="store_true",
         default=False,
-        help="Check tool environment and exit without scanning",
+        help="Verify tool availability (exit 1 if required tools are missing)",
     )
     parser.add_argument(
         "--skip-discovery",
@@ -308,7 +308,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         progress.set_phase_status("bootstrap", "skipped")
 
     if args.bootstrap:
-        updater.auto_install_missing(dry_run=args.dry_run)
+        updater.bootstrap_all_tools(dry_run=args.dry_run)
         if not args.domain and not args.target_list:
             progress.print_success("Bootstrap complete. No targets specified; exiting.")
             return 0
@@ -321,7 +321,8 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
 
     if args.check_env:
         updater.check_environment()
-        return 0
+        ok = updater.verify_environment()
+        return 0 if ok else 1
 
     # Target validation
     raw_targets: List[str] = []

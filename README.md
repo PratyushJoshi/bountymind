@@ -20,8 +20,8 @@ Or install manually and let BountyMind bootstrap missing tools on first scan:
 
 ```bash
 pip3 install -e .
-bountymind --bootstrap       # install pip/go tools only
-bountymind --check-env       # verify everything is available
+bountymind --bootstrap       # full pipx + go + SecretFinder install
+bountymind --check-env       # verify (exit 1 if tools missing)
 ```
 
 ---
@@ -59,8 +59,9 @@ bountymind --help
 | `-l FILE` | Scan domains listed in a file (one per line) |
 | `-f FILE` | Alias for `-l` |
 | `-v` | Verbose console output |
-| `--bootstrap` | Auto-install missing pip/go tools |
+| `--bootstrap` | Full install: pipx Python tools, Go binaries, SecretFinder venv |
 | `--update-tools` | Update tools and nuclei templates |
+| `--check-env` | Verify tools (exit code 1 if required tools missing) |
 | `--skip-waf` | Skip WAF detection & evasion phase |
 | `--format markdown,html` | Report formats |
 | `--output-dir DIR` | Custom output directory |
