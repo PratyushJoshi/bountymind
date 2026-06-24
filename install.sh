@@ -203,6 +203,7 @@ PYTHON_TOOLS=(
     "arjun"
     "jwt_tool"
     "tplmap"
+    "schemathesis"   # API schema fuzzing (OpenAPI/Swagger logic + mass-assignment bugs)
 )
 
 for tool in "${PYTHON_TOOLS[@]}"; do
@@ -311,6 +312,63 @@ EOF
     else
         warn "dirsearch dependencies failed (non-fatal)"
     fi
+fi
+
+# ── 6.5 High-bounty scanners (Rust / git) ─────────────────────────────────────
+header "Step 6.5 — High-Bounty Scanners (Rust + git)"
+
+# Rust toolchain (needed for ppfuzz + x8). Installed for the real user.
+if ! sudo -u "$REAL_USER" env HOME="$REAL_HOME" bash -lc 'command -v cargo' &>/dev/null; then
+    info "Rust/cargo not found — installing via rustup (non-interactive)..."
+    sudo -u "$REAL_USER" env HOME="$REAL_HOME" bash -lc \
+        "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y" \
+        && success "Rust installed" || warn "Rust install failed (ppfuzz/x8 will be skipped)"
+fi
+
+# cargo-based scanners: ppfuzz (prototype pollution), x8 (hidden params)
+for crate in ppfuzz x8; do
+    if sudo -u "$REAL_USER" env HOME="$REAL_HOME" bash -lc "command -v $crate" &>/dev/null; then
+        info "  $crate — already installed"
+    else
+        info "  cargo installing $crate ..."
+        sudo -u "$REAL_USER" env HOME="$REAL_HOME" bash -lc \
+            "source \$HOME/.cargo/env 2>/dev/null; cargo install $crate" \
+            && success "  $crate installed" || warn "  $crate failed (non-fatal)"
+    fi
+    # Expose cargo bin system-wide
+    CARGO_BIN="$REAL_HOME/.cargo/bin/$crate"
+    if [[ -x "$CARGO_BIN" ]]; then
+        ln -sf "$CARGO_BIN" "/usr/local/bin/$crate" 2>/dev/null || true
+    fi
+done
+
+# smuggler (HTTP request smuggling) — python script via git + wrapper
+SMUGGLER_DIR="$SCRIPT_DIR/tools/smuggler"
+if [[ ! -f "$SMUGGLER_DIR/smuggler.py" ]]; then
+    info "Cloning smuggler..."
+    git clone -q https://github.com/defparam/smuggler.git "$SMUGGLER_DIR" \
+        || warn "smuggler clone failed (non-fatal)"
+fi
+if [[ -f "$SMUGGLER_DIR/smuggler.py" ]]; then
+    cat > /usr/local/bin/smuggler << EOF
+#!/usr/bin/env bash
+exec python3 "$SMUGGLER_DIR/smuggler.py" "\$@"
+EOF
+    chmod +x /usr/local/bin/smuggler
+    success "smuggler ready (wrapper)"
+fi
+
+# bypass-403 (403/401 bypass) — shell script via git + wrapper
+BYPASS_DIR="$SCRIPT_DIR/tools/bypass-403"
+if [[ ! -f "$BYPASS_DIR/bypass-403.sh" ]]; then
+    info "Cloning bypass-403..."
+    git clone -q https://github.com/iamj0ker/bypass-403.git "$BYPASS_DIR" \
+        || warn "bypass-403 clone failed (non-fatal)"
+fi
+if [[ -f "$BYPASS_DIR/bypass-403.sh" ]]; then
+    chmod +x "$BYPASS_DIR/bypass-403.sh" 2>/dev/null || true
+    ln -sf "$BYPASS_DIR/bypass-403.sh" /usr/local/bin/bypass-403 2>/dev/null || true
+    success "bypass-403 ready"
 fi
 
 # ── 7. Nuclei templates ───────────────────────────────────────────────────────

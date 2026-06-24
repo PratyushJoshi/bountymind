@@ -286,6 +286,14 @@ class ConfigManager:
     def nuclei_templates_path(self) -> str:
         return str(self.tool_config("nuclei").get("templates_path", "") or "")
 
+    @property
+    def dast_enabled(self) -> bool:
+        return bool(self.get("scanning", "dast_enabled", default=True))
+
+    @property
+    def dast_max_urls(self) -> int:
+        return int(self.get("scanning", "dast_max_urls", default=1500))
+
     # ------------------------------------------------------------------
     # Reporting settings
     # ------------------------------------------------------------------

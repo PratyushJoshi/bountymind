@@ -534,55 +534,82 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
 
         # Phase 2.7 — Deep Detection Scans
         from modules.advanced_scanners import (
+            Bypass403Scanner,
             AdvancedNucleiScans,
             CachePoisoningTester,
             CORSScanner,
             CSRFTester,
+            DASTFuzzingScanner,
             GraphQLFinder,
+            HiddenParamScanner,
             IDORScanner,
             InfoDisclosure,
+            MassAssignmentScanner,
             JWTScanner,
             OAuthTester,
             PathTraversalScanner,
+            PrototypePollutionScanner,
             RaceConditionTester,
             SensitiveDirectoryScanner,
+            SchemaFuzzer,
             SSTIScanner,
             SQLiScanner,
+            SmugglerScanner,
             WebSocketTester,
             XSSScanner,
         )
 
         progress.set_phase_status("deep-scans", "running")
-        try:
-            SQLiScanner(log, runner).scan(session)
-            XSSScanner(log, runner).scan(session)
 
-            advanced_nuclei = AdvancedNucleiScans(log, runner)
-            advanced_nuclei.scan_open_redirects(session)
-            advanced_nuclei.scan_ssrf(session)
+        def _safe_scan(label: str, fn) -> None:
+            """Run one detection module in isolation.
 
-            GraphQLFinder(log, runner).find_graphql(session)
-            CORSScanner(log, runner).scan_cors(session)
-            InfoDisclosure(log, runner).scan(session)
+            A failure in any single scanner must never abort the rest — every
+            tool gets its chance so no bug is left unturned.
+            """
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 - isolate per-scanner failures
+                msg = f"{label} error: {exc}"
+                log.error(msg, exc_info=True)
+                session.warnings.append(msg)
+                progress.print_warning(msg)
 
-            JWTScanner(log, runner).scan(session)
-            SSTIScanner(log, runner).scan(session)
-            IDORScanner(log, runner).scan(session)
-            PathTraversalScanner(log, runner).scan(session)
-            RaceConditionTester(log, runner).scan(session)
-            CSRFTester(log, runner).scan(session)
-            WebSocketTester(log, runner).scan(session)
-            OAuthTester(log, runner).scan(session)
-            CachePoisoningTester(log, runner).scan(session)
-            SensitiveDirectoryScanner(log, runner).scan(session)
-
-            progress.set_phase_status("deep-scans", "done")
-        except Exception as exc:
-            msg = f"Deep scan phase error: {exc}"
-            log.error(msg, exc_info=True)
-            session.warnings.append(msg)
-            progress.set_phase_status("deep-scans", "error")
-            progress.print_error(msg)
+        advanced_nuclei = AdvancedNucleiScans(log, runner)
+        deep_scans = [
+            # Surface/context gathering first (other scanners depend on results)
+            ("InfoDisclosure", lambda: InfoDisclosure(log, runner).scan(session)),
+            ("SensitiveDirectories", lambda: SensitiveDirectoryScanner(log, runner).scan(session)),
+            ("GraphQLFinder", lambda: GraphQLFinder(log, runner).find_graphql(session)),
+            # Injection / high-bounty active testing
+            ("DASTFuzzing", lambda: DASTFuzzingScanner(log, runner, cfg.dast_max_urls).scan(session)
+                if cfg.dast_enabled else None),
+            ("SQLi", lambda: SQLiScanner(log, runner).scan(session)),
+            ("XSS", lambda: XSSScanner(log, runner).scan(session)),
+            ("SSTI", lambda: SSTIScanner(log, runner).scan(session)),
+            ("OpenRedirect", lambda: advanced_nuclei.scan_open_redirects(session)),
+            ("SSRF", lambda: advanced_nuclei.scan_ssrf(session)),
+            ("CORS", lambda: CORSScanner(log, runner).scan_cors(session)),
+            ("PathTraversal", lambda: PathTraversalScanner(log, runner).scan(session)),
+            ("IDOR", lambda: IDORScanner(log, runner).scan(session)),
+            ("JWT", lambda: JWTScanner(log, runner).scan(session)),
+            ("RaceCondition", lambda: RaceConditionTester(log, runner).scan(session)),
+            ("CSRF", lambda: CSRFTester(log, runner).scan(session)),
+            ("WebSocket", lambda: WebSocketTester(log, runner).scan(session)),
+            ("OAuth", lambda: OAuthTester(log, runner).scan(session)),
+            ("CachePoisoning", lambda: CachePoisoningTester(log, runner).scan(session)),
+            # High-bounty specialty scanners
+            ("Smuggling", lambda: SmugglerScanner(log, runner).scan(session)),
+            ("PrototypePollution", lambda: PrototypePollutionScanner(log, runner, harvester).scan(session)),
+            ("Bypass403", lambda: Bypass403Scanner(log, runner).scan(session)),
+            ("HiddenParams", lambda: HiddenParamScanner(log, runner).scan(session)),
+            ("SchemaFuzzing", lambda: SchemaFuzzer(log, runner).scan(session)),
+            ("MassAssignment", lambda: MassAssignmentScanner(log, runner).scan(session)),
+        ]
+        for label, fn in deep_scans:
+            progress.set_phase_status("deep-scans", "running", label)
+            _safe_scan(label, fn)
+        progress.set_phase_status("deep-scans", "done")
 
         # Phase 3 — Reporting
         progress.set_phase_status("reporting", "running")

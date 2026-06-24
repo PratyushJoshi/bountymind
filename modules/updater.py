@@ -256,6 +256,33 @@ PYTHON_PIPX_TOOLS: Dict[str, str] = {
     "tplmap": "tplmap",
 }
 
+# High-bounty optional Python scanners installed via pipx/pip during bootstrap.
+# (Only genuine PyPI packages belong here. smuggler/ppfuzz/x8 are NOT pip packages
+#  — they are handled by dedicated git/cargo bootstrappers below.)
+PYTHON_PIPX_ADVANCED: Dict[str, str] = {
+    "schemathesis": "schemathesis",
+}
+
+# Rust/cargo-based scanners (installed via `cargo install` during bootstrap).
+CARGO_BOOTSTRAP_TOOLS: Dict[str, str] = {
+    "ppfuzz": "ppfuzz",  # client-side prototype pollution fuzzer
+    "x8": "x8",          # hidden parameter discovery
+}
+
+# Git-cloned script tools that get a small PATH wrapper.
+GIT_WRAPPER_TOOLS: Dict[str, Dict[str, str]] = {
+    "smuggler": {
+        "repo": "https://github.com/defparam/smuggler.git",
+        "dest": "tools/smuggler",
+        "script": "smuggler.py",
+    },
+    "bypass-403": {
+        "repo": "https://github.com/iamj0ker/bypass-403.git",
+        "dest": "tools/bypass-403",
+        "script": "bypass-403.sh",
+    },
+}
+
 # Go tools installed during full bootstrap
 GO_BOOTSTRAP_TOOLS: Dict[str, str] = {
     "gau": "github.com/lc/gau/v2/cmd/gau@latest",
@@ -280,7 +307,10 @@ CORE_ENV_TOOLS: List[str] = [
     "nuclei", "httpx", "subfinder", "ffuf", "whatweb", "nmap",
 ]
 
-OPTIONAL_ENV_TOOLS: List[str] = ["dalfox", "sqlmap", "trufflehog", "jwt_tool", "tplmap"]
+OPTIONAL_ENV_TOOLS: List[str] = [
+    "dalfox", "sqlmap", "trufflehog", "jwt_tool", "tplmap",
+    "smuggler", "ppfuzz", "x8", "schemathesis", "bypass-403",
+]
 
 
 class ToolUpdater:
@@ -378,6 +408,12 @@ class ToolUpdater:
             self._ensure_pipx(dry_run=True)
             for tool, pkg in PYTHON_PIPX_TOOLS.items():
                 self._progress.print_info(f"Would pipx install: {tool} ({pkg})")
+            for tool, pkg in PYTHON_PIPX_ADVANCED.items():
+                self._progress.print_info(f"Would pipx install: {tool} ({pkg})")
+            for tool, pkg in CARGO_BOOTSTRAP_TOOLS.items():
+                self._progress.print_info(f"Would cargo install: {tool} ({pkg})")
+            for tool, meta in GIT_WRAPPER_TOOLS.items():
+                self._progress.print_info(f"Would clone + wrap: {tool} ({meta['repo']})")
             for tool, repo in GO_BOOTSTRAP_TOOLS.items():
                 self._progress.print_info(f"Would go install: {tool} ({repo})")
             self._progress.print_info("Would apt install: sqlmap")
@@ -400,6 +436,10 @@ class ToolUpdater:
 
         self._ensure_pipx(dry_run=False)
         self._bootstrap_pipx_tools(dry_run=False)
+        self._bootstrap_pipx_advanced_tools(dry_run=False)
+        self._bootstrap_cargo_tools(dry_run=False)
+        self._bootstrap_smuggler(dry_run=False)
+        self._bootstrap_bypass_403(dry_run=False)
         self._bootstrap_go_tools(dry_run=False)
         self._bootstrap_sqlmap(dry_run=False)
         self._bootstrap_secretfinder_venv(dry_run=False)
@@ -498,6 +538,192 @@ class ToolUpdater:
                 self._progress.print_warning(f"Failed to install {tool}")
                 if tool == "tplmap":
                     self._bootstrap_tplmap_fallback(dry_run=dry_run)
+
+    def _bootstrap_pipx_advanced_tools(self, dry_run: bool = False) -> None:
+        """Install optional high-bounty Python scanners via pipx/pip."""
+        use_pipx = shutil.which("pipx") is not None
+        self._progress.print_phase("Advanced Python Security Tools")
+
+        for tool, pkg in PYTHON_PIPX_ADVANCED.items():
+            if self._tool_available(tool):
+                if use_pipx and not dry_run:
+                    self._runner.run(
+                        tool_name="pipx",
+                        cmd=["pipx", "upgrade", pkg],
+                        target=tool,
+                        timeout=120,
+                        save_raw=False,
+                        check_exists=False,
+                    )
+                continue
+
+            if dry_run:
+                self._progress.print_info(f"Would install {tool}")
+                continue
+
+            self._progress.print_info(f"Installing {tool}...")
+            if use_pipx:
+                result = self._runner.run(
+                    tool_name="pipx",
+                    cmd=["pipx", "install", pkg],
+                    target=tool,
+                    timeout=300,
+                    save_raw=False,
+                    check_exists=False,
+                )
+            else:
+                result = self._runner.run(
+                    tool_name="pip3",
+                    cmd=["pip3", "install", "-q", pkg],
+                    target=tool,
+                    timeout=300,
+                    save_raw=False,
+                    check_exists=False,
+                )
+
+            if result.return_code == 0:
+                self._progress.print_success(f"Installed {tool}")
+            else:
+                self._progress.print_warning(f"Failed to install {tool} (optional)")
+
+    def _bootstrap_bypass_403(self, dry_run: bool = False) -> None:
+        """Clone bypass-403 script and expose it on PATH when missing."""
+        if self._tool_available("bypass-403"):
+            return
+
+        repo_dir = Path("tools") / "bypass-403"
+        script = repo_dir / "bypass-403.sh"
+
+        if dry_run:
+            self._progress.print_info("Would clone bypass-403 and link into ~/.local/bin")
+            return
+
+        if not script.exists():
+            self._progress.print_info("Cloning bypass-403...")
+            result = self._runner.run(
+                tool_name="git",
+                cmd=["git", "clone", "https://github.com/iamj0ker/bypass-403.git", str(repo_dir)],
+                target="bypass-403",
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code != 0 and not script.exists():
+                self._progress.print_warning("bypass-403 clone failed (optional)")
+                return
+
+        if not script.exists():
+            return
+
+        local_bin = Path.home() / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            wrapper = local_bin / "bypass-403.cmd"
+            wrapper.write_text(
+                f'@echo off\r\nbash "{script.resolve()}" %*\r\n',
+                encoding="utf-8",
+            )
+        else:
+            link_path = local_bin / "bypass-403"
+            try:
+                if link_path.exists() or link_path.is_symlink():
+                    link_path.unlink()
+                os.symlink(str(script.resolve()), str(link_path))
+            except OSError as exc:
+                log.debug("Could not link bypass-403: %s", exc)
+                return
+
+        self._ensure_pipx_on_path()
+        self._progress.print_success("bypass-403 ready (local wrapper)")
+
+    def _bootstrap_cargo_tools(self, dry_run: bool = False) -> None:
+        """Install Rust/cargo scanners (ppfuzz, x8) via `cargo install`."""
+        if not self._platform.has_cargo:
+            if any(not self._tool_available(t) for t in CARGO_BOOTSTRAP_TOOLS):
+                self._progress.print_warning(
+                    "cargo (Rust) not found — skipping ppfuzz/x8. "
+                    "Install Rust: https://rustup.rs then re-run --bootstrap"
+                )
+            return
+
+        self._progress.print_phase("Rust Security Tools (cargo)")
+        for tool, crate in CARGO_BOOTSTRAP_TOOLS.items():
+            if self._tool_available(tool):
+                continue
+            if dry_run:
+                self._progress.print_info(f"Would cargo install {crate}")
+                continue
+            self._progress.print_info(f"cargo installing {tool}...")
+            result = self._runner.run(
+                tool_name="cargo",
+                cmd=["cargo", "install", crate],
+                target=tool,
+                timeout=900,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code == 0:
+                # cargo installs to ~/.cargo/bin — make sure that's on PATH
+                self._ensure_cargo_on_path()
+                self._progress.print_success(f"Installed {tool}")
+            else:
+                self._progress.print_warning(f"Failed to install {tool} (optional)")
+
+    def _ensure_cargo_on_path(self) -> None:
+        cargo_bin = Path.home() / ".cargo" / "bin"
+        current = os.environ.get("PATH", "")
+        if cargo_bin.exists() and str(cargo_bin) not in current:
+            os.environ["PATH"] = current + os.pathsep + str(cargo_bin)
+
+    def _bootstrap_smuggler(self, dry_run: bool = False) -> None:
+        """Clone defparam/smuggler and expose a `smuggler` wrapper on PATH."""
+        if self._tool_available("smuggler"):
+            return
+
+        meta = GIT_WRAPPER_TOOLS["smuggler"]
+        repo_dir = Path(meta["dest"])
+        script = repo_dir / meta["script"]
+
+        if dry_run:
+            self._progress.print_info("Would clone smuggler and link into ~/.local/bin")
+            return
+
+        if not script.exists():
+            self._progress.print_info("Cloning smuggler...")
+            result = self._runner.run(
+                tool_name="git",
+                cmd=["git", "clone", meta["repo"], str(repo_dir)],
+                target="smuggler",
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code != 0 and not script.exists():
+                self._progress.print_warning("smuggler clone failed (optional)")
+                return
+        if not script.exists():
+            return
+
+        local_bin = Path.home() / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            wrapper = local_bin / "smuggler.cmd"
+            wrapper.write_text(
+                f'@echo off\r\npython "{script.resolve()}" %*\r\n', encoding="utf-8"
+            )
+        else:
+            wrapper = local_bin / "smuggler"
+            wrapper.write_text(
+                "#!/bin/bash\n"
+                f'exec python3 "{script.resolve()}" "$@"\n',
+                encoding="utf-8",
+            )
+            try:
+                os.chmod(wrapper, 0o755)
+            except OSError:
+                pass
+        self._ensure_pipx_on_path()
+        self._progress.print_success("smuggler ready (local wrapper)")
 
     def _bootstrap_tplmap_fallback(self, dry_run: bool = False) -> None:
         """Install tplmap from GitHub if pipx/pip installation is unavailable."""
@@ -715,9 +941,10 @@ class ToolUpdater:
 
     def install_advanced_tools(self, dry_run: bool = False) -> None:
         """
-        Install Python-based security tools via pip (wafw00f, arjun, s3scanner).
+        Install Python-based security tools via pipx/pip (wafw00f, arjun, s3scanner).
         Safe to call on first run after git clone.
         """
+        pipx_tools = dict(PYTHON_PIPX_ADVANCED)  # schemathesis (real pip package)
         pip_tools = {
             "wafw00f": "wafw00f",
             "arjun": "arjun",
@@ -725,7 +952,46 @@ class ToolUpdater:
             "jwt_tool": "jwt_tool",
             "tplmap": "tplmap",
         }
+        use_pipx = shutil.which("pipx") is not None
+        if use_pipx:
+            self._ensure_pipx_on_path()
+
         self._progress.print_phase("Installing Python Security Tools")
+        for tool_name, pip_package in pipx_tools.items():
+            if shutil.which(tool_name) or self._platform.resolve_binary(tool_name):
+                log.debug("%s already available", tool_name)
+                continue
+            if dry_run:
+                installer = "pipx install" if use_pipx else "pip3 install"
+                self._progress.print_info(f"Would run: {installer} {pip_package}")
+                continue
+            self._progress.print_info(f"Installing {tool_name}...")
+            if use_pipx:
+                result = self._runner.run(
+                    tool_name="pipx",
+                    cmd=["pipx", "install", pip_package],
+                    target=tool_name,
+                    timeout=300,
+                    save_raw=False,
+                    check_exists=False,
+                )
+            else:
+                result = self._runner.run(
+                    tool_name="pip3",
+                    cmd=["pip3", "install", "-q", pip_package],
+                    target=tool_name,
+                    timeout=180,
+                    save_raw=False,
+                    check_exists=False,
+                )
+            if result.return_code == 0:
+                self._progress.print_success(f"Installed {tool_name}")
+            else:
+                hint = f"pipx install {pip_package}" if use_pipx else self._platform.pip_install_hint(pip_package)
+                self._progress.print_warning(
+                    f"Failed to install {tool_name}. Run manually: {hint}"
+                )
+
         for tool_name, pip_package in pip_tools.items():
             if not self._cfg.is_tool_enabled(tool_name):
                 continue
@@ -753,6 +1019,11 @@ class ToolUpdater:
                 )
                 if tool_name == "tplmap":
                     self._bootstrap_tplmap_fallback(dry_run=dry_run)
+
+        # Rust + git-based high-bounty scanners (correct install methods)
+        self._bootstrap_cargo_tools(dry_run=dry_run)
+        self._bootstrap_smuggler(dry_run=dry_run)
+        self._bootstrap_bypass_403(dry_run=dry_run)
 
     def auto_install_missing(self, dry_run: bool = False) -> None:
         """

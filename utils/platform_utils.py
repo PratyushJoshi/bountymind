@@ -154,6 +154,10 @@ class PlatformInfo:
     def has_pip(self) -> bool:
         return shutil.which("pip3") is not None or shutil.which("pip") is not None
 
+    @property
+    def has_cargo(self) -> bool:
+        return shutil.which("cargo") is not None
+
     # ------------------------------------------------------------------
     # Path resolution
     # ------------------------------------------------------------------

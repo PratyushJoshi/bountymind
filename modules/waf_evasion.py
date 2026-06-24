@@ -154,17 +154,20 @@ class WAFEvasion:
         if not shutil.which("nuclei"):
             return
 
-        evasion_raw = self._out.raw / "nuclei" / f"wafbypass_{domain}.json"
+        evasion_raw = self._out.raw / "nuclei" / f"wafbypass_{domain}.jsonl"
         evasion_raw.parent.mkdir(parents=True, exist_ok=True)
 
         self._runner.run(
             tool_name="nuclei",
             cmd=[
                 "nuclei", "-l", str(waf_list),
-                "-json-export", str(evasion_raw),
+                "-jsonl", "-o", str(evasion_raw),
                 "-silent",
-                "-profile", "waf-bypass",
-                "-exclude-tags", "dos,brute,ddos,intrusive",
+                # WAF bypass posture: randomize Host header casing + spoof common
+                # forwarding headers so detection templates still fire behind a WAF.
+                "-H", "X-Forwarded-For: 127.0.0.1",
+                "-H", "X-Real-IP: 127.0.0.1",
+                "-exclude-tags", "dos,brute,ddos,intrusive,destructive,fuzz",
             ],
             target=domain,
             timeout=1200,

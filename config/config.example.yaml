@@ -288,8 +288,11 @@ scanning:
     - "high"
     - "critical"
 
-  # Nuclei template categories to EXCLUDE (always excluded for safety)
-  # These categories are intrusive, destructive, or denial-of-service capable
+  # Nuclei template categories to EXCLUDE (always excluded for safety).
+  # Only genuinely dangerous/noisy categories are excluded. Detection templates
+  # for high-value bugs (rce, sqli, lfi, ssrf, xss, etc.) are KEPT — they only
+  # detect, they do not exploit. The "exploit" tag (active exploitation) stays
+  # excluded so nothing destructive runs.
   excluded_tags:
     - "dos"
     - "fuzz"
@@ -298,21 +301,19 @@ scanning:
     - "intrusive"
     - "destructive"
     - "exploit"
-    - "rce"
-    - "sqli"
 
-  # Nuclei template categories to include (safe, informational)
-  included_tags:
-    - "cve"
-    - "exposure"
-    - "misconfig"
-    - "technology"
-    - "default-login"
-    - "takeover"
-    - "config"
-    - "info"
-    - "panel"
-    - "token"
+  # Nuclei template categories to INCLUDE.
+  # Leave EMPTY for maximum coverage — nuclei then runs the ENTIRE community
+  # template set (minus excluded_tags above), so no bug is left unturned.
+  # Populate this list only if you want to deliberately narrow the scan scope.
+  included_tags: []
+
+  # Run nuclei DAST / fuzzing templates against parameterized URLs harvested
+  # from gau/waybackurls/katana (reflected XSS, SQLi, SSTI, LFI, redirect, etc.).
+  # This is the single biggest coverage boost for bug-bounty-class findings.
+  dast_enabled: true
+  # Maximum parameterized URLs to fuzz per session (safety cap)
+  dast_max_urls: 1500
 
   # Rate limit for nuclei (requests/second)
   nuclei_rate_limit: 50

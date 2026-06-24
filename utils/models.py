@@ -273,6 +273,13 @@ class TargetContext:
     cors_misconfigs: List[Dict[str, Any]] = field(default_factory=list)
     graphql_endpoints: List[str] = field(default_factory=list)
     info_disclosures: List[Dict[str, Any]] = field(default_factory=list)
+    smuggling_findings: List[Dict[str, Any]] = field(default_factory=list)
+    prototype_pollution: List[Dict[str, Any]] = field(default_factory=list)
+    bypass_403_findings: List[Dict[str, Any]] = field(default_factory=list)
+    hidden_params: List[Dict[str, Any]] = field(default_factory=list)
+    api_schema_findings: List[Dict[str, Any]] = field(default_factory=list)
+    mass_assignment_findings: List[Dict[str, Any]] = field(default_factory=list)
+    dast_findings: List[Dict[str, Any]] = field(default_factory=list)
     sensitive_paths: List[Dict[str, Any]] = field(default_factory=list)
     auth_token: Optional[str] = None
     # --- WAF detection & evasion results ---

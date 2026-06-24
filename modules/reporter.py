@@ -210,6 +210,37 @@ def generate_manual_checklist(target: ScanSession) -> str:
         checklist.append("<li>Try X-Forwarded-Host and X-Forwarded-Scheme headers</li>")
         checklist.append("</ul>")
 
+    if target.smuggling_findings:
+        checklist.append("<h3>🚀 Request Smuggling – Exploit</h3><ul><li>Use smuggler output and Burp to poison the queue, hijack sessions, or bypass front-end security.</li></ul>")
+
+    if target.prototype_pollution:
+        checklist.append("<h3>🧬 Prototype Pollution – Craft Gadgets</h3><ul><li>For each polluted JS file, identify the library and try property-injection gadgets (e.g., <code>__proto__.isAdmin=true</code>).</li></ul>")
+
+    if target.bypass_403_findings:
+        checklist.append("<h3>🔓 Bypassed 403 Resources – Explore</h3><ul>")
+        for b in target.bypass_403_findings[:5]:
+            checklist.append(f"<li>Access {html.escape(b.get('original',''))} → see if sensitive content is now available.</li>")
+        checklist.append("</ul>")
+
+    if target.hidden_params:
+        checklist.append("<h3>📝 Hidden Parameters – Fuzz Further</h3><ul><li>Test each parameter for SQLi, XSS, IDOR using your other modules.</li></ul>")
+
+    if target.api_schema_findings:
+        checklist.append("<h3>🧩 API Logic Flaws – Manual Review</h3><ul><li>Examine schemathesis output for missing authorization checks, mass assignment, etc.</li></ul>")
+
+    if target.dast_findings:
+        checklist.append("<h3>🎯 DAST Parameter Findings – Confirm & Weaponize</h3><ul>")
+        for item in target.dast_findings[:8]:
+            info = item.get("info", {}) if isinstance(item, dict) else {}
+            name = info.get("name", item.get("template-id", "")) if isinstance(info, dict) else ""
+            matched = item.get("matched-at", item.get("host", "")) if isinstance(item, dict) else ""
+            checklist.append(
+                f"<li>Reproduce <code>{html.escape(str(name))}</code> at "
+                f"<code>{html.escape(str(matched))}</code> manually, then build a clean PoC "
+                f"(reflected/stored context, encoding, WAF bypass).</li>"
+            )
+        checklist.append("</ul>")
+
     critical = [s for s in target.sensitive_paths if s.get("sensitivity") in {"critical", "high"}]
     if critical:
         checklist.append("<h3>Critical Sensitive Files - Inspect Contents</h3><ul>")
@@ -609,12 +640,14 @@ class ReportGenerator:
         self._md_screenshots(lines, session)
         self._md_waf_detection(lines, session)
         self._md_waf_evasion(lines, session)
+        # All automated deep-scan findings come BEFORE the human-validation block.
+        self._md_advanced_findings(lines, session)
         self._md_tool_summary(lines, session)
         self._md_warnings(lines, session)
         self._md_data_sources(lines, session)
+        # --- Human validation & testing required (always last) ---
         self._md_authenticated_followup(lines, session)
         self._md_manual_gateways(lines, session)
-        self._md_advanced_findings(lines, session)
 
         content = "\n".join(lines)
         path = self._out.report_path(session.session_id, "markdown")
@@ -690,6 +723,13 @@ class ReportGenerator:
             f"<div class='metric-card'><h3>IDOR</h3><div class='value'>{len(s.idor_findings)}</div></div>",
             f"<div class='metric-card'><h3>CSRF</h3><div class='value'>{len(s.csrf_findings)}</div></div>",
             f"<div class='metric-card'><h3>Cache Poison</h3><div class='value'>{len(s.cache_poisoning_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Smuggling</h3><div class='value'>{len(s.smuggling_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Proto Pollution</h3><div class='value'>{len(s.prototype_pollution)}</div></div>",
+            f"<div class='metric-card'><h3>403 Bypass</h3><div class='value'>{len(s.bypass_403_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Hidden Params</h3><div class='value'>{len(s.hidden_params)}</div></div>",
+            f"<div class='metric-card'><h3>API Schema</h3><div class='value'>{len(s.api_schema_findings)}</div></div>",
+            f"<div class='metric-card'><h3>Mass Assign</h3><div class='value'>{len(s.mass_assignment_findings)}</div></div>",
+            f"<div class='metric-card'><h3>DAST Fuzzing</h3><div class='value'>{len(s.dast_findings)}</div></div>",
             "</div>",
             "",
             f"**{len(s.manual_flags)} items** were flagged for manual analyst validation "
@@ -1004,6 +1044,15 @@ class ReportGenerator:
 
     def _md_authenticated_followup(self, lines: List[str], s: ScanSession) -> None:
         lines += [
+            "# 🧑‍💻 HUMAN VALIDATION & TESTING REQUIRED",
+            "",
+            "> Everything above this point is **automated output**. Everything below",
+            "> requires a human analyst to confirm, validate, and (where authorized)",
+            "> exploit. This is intentionally the **final section** of the report so the",
+            "> manual workload is consolidated in one place.",
+            "",
+            "---",
+            "",
             "## Authenticated Validation Follow-Up",
             "",
             "> The following items were identified during unauthenticated automated",
@@ -1051,10 +1100,12 @@ class ReportGenerator:
             "> for the target scope.**",
             "",
         ]
-        if not s.manual_flags:
+        checklist_html = generate_manual_checklist(s).strip()
+        if not s.manual_flags and not checklist_html:
             lines += ["_No manual verification items at this time._", ""]
             return
-        lines.append(generate_manual_checklist(s))
+        if checklist_html:
+            lines.append(checklist_html)
         for i, flag in enumerate(s.manual_flags, 1):
             sev_emoji = {
                 "critical": "🔴", "high": "🟠", "medium": "🟡",
@@ -1220,6 +1271,80 @@ class ReportGenerator:
             rows.append("</ul>")
             section("30. Race Conditions", "\n".join(rows))
 
+        if s.smuggling_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.smuggling_findings[:50]:
+                rows.append(f"<li class='finding-item critical'><strong>Smuggling</strong> at {html.escape(str(item.get('url', '')))}</li>")
+            rows.append("</ul>")
+            section("31. HTTP Request Smuggling", "\n".join(rows))
+        else:
+            section("31. HTTP Request Smuggling", "<p>No request smuggling detected.</p>")
+
+        if s.prototype_pollution:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.prototype_pollution[:50]:
+                rows.append(f"<li class='finding-item high'><code>{html.escape(str(item.get('js_url', '')))}</code> – see output</li>")
+            rows.append("</ul>")
+            section("32. Prototype Pollution", "\n".join(rows))
+        else:
+            section("32. Prototype Pollution", "<p>No client-side prototype pollution found.</p>")
+
+        if s.bypass_403_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.bypass_403_findings[:50]:
+                rows.append(f"<li class='finding-item medium'>Original: {html.escape(str(item.get('original', '')))} → {html.escape(str(item.get('bypass_method', '')))}</li>")
+            rows.append("</ul>")
+            section("33. 403 Bypasses", "\n".join(rows))
+        else:
+            section("33. 403 Bypasses", "<p>No 403 bypasses achieved.</p>")
+
+        if s.hidden_params:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.hidden_params[:50]:
+                rows.append(f"<li class='finding-item info'><code>{html.escape(str(item.get('url', '')))}</code> → param: {html.escape(str(item.get('param', '')))}</li>")
+            rows.append("</ul>")
+            section("34. Hidden Parameters", "\n".join(rows))
+        else:
+            section("34. Hidden Parameters", "<p>No hidden parameters discovered.</p>")
+
+        if s.api_schema_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.api_schema_findings[:50]:
+                rows.append(f"<li class='finding-item high'><code>{html.escape(str(item.get('schema_url', '')))}</code> – failures found</li>")
+            rows.append("</ul>")
+            section("35. API Logic Bugs (Schemathesis)", "\n".join(rows))
+        else:
+            section("35. API Logic Bugs (Schemathesis)", "<p>No OpenAPI schema issues detected.</p>")
+
+        if s.mass_assignment_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.mass_assignment_findings[:50]:
+                rows.append(f"<li class='finding-item medium'><strong>{html.escape(str(item.get('template-id', '')))}</strong> at {html.escape(str(item.get('matched-at', '')))}</li>")
+            rows.append("</ul>")
+            section("36. Mass Assignment", "\n".join(rows))
+        else:
+            section("36. Mass Assignment", "<p>No mass assignment vulnerabilities.</p>")
+
+        if s.dast_findings:
+            rows = ["<ul class='findings-list'>"]
+            for item in s.dast_findings[:100]:
+                info = item.get("info", {}) if isinstance(item, dict) else {}
+                name = info.get("name", item.get("template-id", "DAST finding")) if isinstance(info, dict) else item.get("template-id", "")
+                sev = str(info.get("severity", "")).lower() if isinstance(info, dict) else ""
+                sev_class = sev if sev in {"critical", "high", "medium", "info"} else "high"
+                matched = item.get("matched-at", item.get("host", "")) if isinstance(item, dict) else ""
+                rows.append(
+                    f"<li class='finding-item {sev_class}'><strong>{html.escape(str(name))}</strong>"
+                    f" [{html.escape(sev or 'n/a')}] at <code>{html.escape(str(matched))}</code></li>"
+                )
+            rows.append("</ul>")
+            section("37. DAST Parameter Fuzzing (XSS/SQLi/SSTI/LFI/Redirect)", "\n".join(rows))
+        else:
+            section(
+                "37. DAST Parameter Fuzzing (XSS/SQLi/SSTI/LFI/Redirect)",
+                "<p>No DAST/fuzzing findings on parameterized URLs.</p>",
+            )
+
     # ------------------------------------------------------------------
     # HTML report
     # ------------------------------------------------------------------
@@ -1242,12 +1367,14 @@ class ReportGenerator:
         self._md_screenshots(md_lines, session)
         self._md_waf_detection(md_lines, session)
         self._md_waf_evasion(md_lines, session)
+        # All automated deep-scan findings come BEFORE the human-validation block.
+        self._md_advanced_findings(md_lines, session)
         self._md_tool_summary(md_lines, session)
         self._md_warnings(md_lines, session)
         self._md_data_sources(md_lines, session)
+        # --- Human validation & testing required (always last) ---
         self._md_authenticated_followup(md_lines, session)
         self._md_manual_gateways(md_lines, session)
-        self._md_advanced_findings(md_lines, session)
 
         md_content = "\n".join(md_lines)
 
@@ -1293,6 +1420,10 @@ class ReportGenerator:
     .metric-card h3 {{ margin: 0 0 0.35rem; font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }}
     .metric-card .value {{ font-size: 1.7rem; font-weight: 700; color: #f0f6fc; line-height: 1; }}
     .findings-list {{ margin: 0.75rem 0 0; padding-left: 1.2rem; }}
+    .finding-item.critical {{ color: #ff7b72; }}
+    .finding-item.high {{ color: #ffa657; }}
+    .finding-item.medium {{ color: #e3b341; }}
+    .finding-item.info {{ color: #79c0ff; }}
   code, pre {{ background: #161b22; padding: 0.2rem 0.4rem; border-radius: 4px;
                font-family: 'Courier New', monospace; color: #a5d6ff; }}
   pre {{ padding: 1rem; overflow-x: auto; }}
@@ -1302,6 +1433,7 @@ class ReportGenerator:
   a {{ color: #58a6ff; }}
   .banner {{ background: #1c1f26; border: 1px solid #f0883e;
              padding: 1rem; border-radius: 6px; margin-bottom: 2rem; color: #f0883e; }}
+  section {{ margin: 2rem 0; padding: 1rem 0; border-top: 1px solid #21262d; }}
 </style>
 </head>
 <body>

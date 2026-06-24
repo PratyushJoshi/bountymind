@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -69,6 +69,32 @@ class _ScannerBase:
         return urls
 
     @staticmethod
+    def _param_urls(target: TargetContext, limit: int = 1500) -> List[str]:
+        """
+        Collect URLs that carry query parameters (``?foo=bar``) from harvested
+        URLs and live hosts. These are the prime candidates for active testing
+        (reflected XSS, SQLi, SSTI, LFI, open-redirect, IDOR, etc.).
+        """
+        urls: List[str] = []
+        seen: set = set()
+
+        def _add(url: Optional[str]) -> None:
+            if not url or "?" not in url or "=" not in url:
+                return
+            if url not in seen:
+                seen.add(url)
+                urls.append(url)
+
+        for item in getattr(target, "harvested_urls", []) or []:
+            url = item.get("url") if isinstance(item, dict) else getattr(item, "url", None)
+            _add(url)
+        for host in getattr(target, "live_hosts", []) or []:
+            url = host.get("url") if isinstance(host, dict) else getattr(host, "url", None)
+            _add(url)
+
+        return urls[:limit]
+
+    @staticmethod
     def _live_domains(target: TargetContext) -> List[str]:
         domains = []
         seen = set()
@@ -86,6 +112,23 @@ class _ScannerBase:
         path = self._parsed_dir() / f"live_urls_{target.domain}.txt"
         path.write_text("\n".join(self._live_urls(target)), encoding="utf-8")
         return path
+
+    @staticmethod
+    def _append_jsonl_findings(path: Path, bucket: List[Dict[str, Any]]) -> None:
+        if not path.exists():
+            return
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        bucket.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            return
 
     @staticmethod
     def _parse_json_payload(payload: str) -> List[Dict[str, Any]]:
@@ -118,29 +161,43 @@ class _ScannerBase:
 class SQLiScanner(_ScannerBase):
     def scan(self, target: TargetContext) -> None:
         self.logger.info("Starting SQLi detection on live endpoints...")
+        if not shutil.which("sqlmap"):
+            return
         urls = self._live_urls(target)
-        if not urls or not shutil.which("sqlmap") or not shutil.which("arjun"):
+        if not urls:
             return
 
         param_file = self._parsed_dir() / f"params_{target.domain}.txt"
         param_file.parent.mkdir(parents=True, exist_ok=True)
         param_lines: List[str] = []
-        for url in urls[:20]:
-            result = self.runner.run(
-                tool_name="arjun",
-                cmd=["arjun", "-u", url, "--get", "--post", "--stable"],
-                target=url,
-                timeout=60,
-                save_raw=False,
-            )
-            output = result.stdout or ""
-            for line in output.splitlines():
-                line = line.strip()
-                if "http" in line and "?" in line:
-                    param_lines.append(line)
+        seen: set = set()
+
+        # Source 1: parameterized URLs harvested from gau/waybackurls/katana.
+        for url in self._param_urls(target, limit=200):
+            if url not in seen:
+                seen.add(url)
+                param_lines.append(url)
+
+        # Source 2: active parameter discovery with arjun (optional).
+        if shutil.which("arjun"):
+            for url in urls[:20]:
+                result = self.runner.run(
+                    tool_name="arjun",
+                    cmd=["arjun", "-u", url, "--get", "--post", "--stable"],
+                    target=url,
+                    timeout=60,
+                    save_raw=False,
+                )
+                output = result.stdout or ""
+                for line in output.splitlines():
+                    line = line.strip()
+                    if "http" in line and "?" in line and line not in seen:
+                        seen.add(line)
+                        param_lines.append(line)
 
         param_file.write_text("\n".join(param_lines), encoding="utf-8")
         if not param_file.exists() or param_file.stat().st_size == 0:
+            self.logger.info("SQLi: no parameterized endpoints discovered; skipping")
             return
 
         output_dir = Path("output") / "sqlmap" / target.domain
@@ -182,11 +239,17 @@ class XSSScanner(_ScannerBase):
     def scan(self, target: TargetContext) -> None:
         if not shutil.which("dalfox"):
             return
-        urls = self._live_urls(target)
-        if not urls:
+
+        # Prioritize parameterized URLs (real XSS surface), then fall back to
+        # live host roots so nothing is missed.
+        param_urls = self._param_urls(target, limit=1000)
+        live_urls = self._live_urls(target)
+        combined: List[str] = list(dict.fromkeys(param_urls + live_urls))
+        if not combined:
             return
 
-        url_file = self._write_live_urls_file(target)
+        url_file = self._parsed_dir() / f"xss_urls_{target.domain}.txt"
+        url_file.write_text("\n".join(combined), encoding="utf-8")
         out_file = self._raw_dir() / f"dalfox_{target.domain}.json"
 
         self.runner.run(
@@ -365,23 +428,6 @@ class AdvancedNucleiScans(_ScannerBase):
             check_exists=False,
         )
         self._append_jsonl_findings(out_file, target.path_traversal_findings)
-
-    @staticmethod
-    def _append_jsonl_findings(path: Path, bucket: List[Dict[str, Any]]) -> None:
-        if not path.exists():
-            return
-        try:
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        bucket.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            return
 
 
 class GraphQLFinder(_ScannerBase):
@@ -814,3 +860,370 @@ class CloudBucketScanner(_ScannerBase):
             return response.status_code in [200, 403]
         except Exception:
             return False
+
+
+class CORSScanner(_ScannerBase):
+    def scan_cors(self, target: TargetContext) -> None:
+        AdvancedNucleiScans(self.logger, self.runner).scan_cors(target)
+
+
+class SmugglerScanner(_ScannerBase):
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("smuggler"):
+            return
+
+        self.logger.info("Testing for HTTP request smuggling...")
+        for url in self._live_urls(target)[:20]:
+            result = self.runner.run(
+                tool_name="smuggler",
+                cmd=["smuggler", "-u", url, "--json"],
+                target=url,
+                timeout=60,
+                save_raw=False,
+                check_exists=False,
+            )
+            output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+            if not output:
+                continue
+            try:
+                data = json.loads(output)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and data.get("vulnerable"):
+                target.smuggling_findings.append({"url": url, "details": data})
+
+
+class PrototypePollutionScanner(_ScannerBase):
+    def __init__(self, logger, runner: CommandRunner, js_miner: Optional[object]) -> None:
+        super().__init__(logger, runner)
+        self.js_miner = js_miner
+
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("ppfuzz") or self.js_miner is None:
+            return
+
+        self.logger.info("Scanning JavaScript for prototype pollution...")
+        js_urls = self._collect_js_urls(target)
+        for js_url in js_urls[:30]:
+            result = self.runner.run(
+                tool_name="ppfuzz",
+                cmd=["ppfuzz", "-u", js_url],
+                target=js_url,
+                timeout=30,
+                save_raw=False,
+                check_exists=False,
+            )
+            output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+            if output and "Prototype pollution found" in output:
+                target.prototype_pollution.append({"js_url": js_url, "output": output})
+
+    def _collect_js_urls(self, target: TargetContext) -> List[str]:
+        if hasattr(self.js_miner, "collect_js_urls"):
+            try:
+                return list(dict.fromkeys(self.js_miner.collect_js_urls(target)))
+            except Exception:
+                pass
+        if hasattr(self.js_miner, "get_js_urls"):
+            try:
+                return list(dict.fromkeys(self.js_miner.get_js_urls(target.harvested_urls)))
+            except Exception:
+                return []
+        return []
+
+
+class Bypass403Scanner(_ScannerBase):
+    def scan(self, target: TargetContext) -> None:
+        command = self._ensure_bypass_403_tool()
+        if not command:
+            return
+
+        self.logger.info("Attempting 403 bypass on restricted resources...")
+        forbidden = self._collect_forbidden_urls(target)
+        for url in list(forbidden)[:20]:
+            result = self.runner.run(
+                tool_name="bypass-403",
+                cmd=command + [url],
+                target=url,
+                timeout=30,
+                save_raw=False,
+                check_exists=False,
+            )
+            output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+            if output and "200 OK" in output:
+                target.bypass_403_findings.append({
+                    "original": url,
+                    "bypass_method": output.splitlines()[0] if output else "unknown",
+                })
+
+    def _collect_forbidden_urls(self, target: TargetContext) -> List[str]:
+        forbidden: List[str] = []
+        seen = set()
+
+        for finding in target.directory_findings:
+            if isinstance(finding, dict):
+                status = finding.get("status") or finding.get("status_code")
+                base_url = finding.get("base_url", "")
+                path = finding.get("path", "")
+                if status in {401, 403} and base_url and path:
+                    url = f"{str(base_url).rstrip('/')}/{str(path).lstrip('/')}"
+                else:
+                    url = finding.get("url", "")
+            else:
+                status = getattr(finding, "status_code", None)
+                url = getattr(finding, "url", "")
+            if status in {401, 403} and url and url not in seen:
+                seen.add(url)
+                forbidden.append(url)
+
+        for finding in target.sensitive_paths:
+            if not isinstance(finding, dict):
+                continue
+            status = finding.get("status")
+            base_url = finding.get("base_url", "")
+            path = finding.get("path", "")
+            if status in {401, 403} and base_url and path:
+                url = f"{str(base_url).rstrip('/')}/{str(path).lstrip('/')}"
+                if url not in seen:
+                    seen.add(url)
+                    forbidden.append(url)
+
+        return forbidden
+
+    def _ensure_bypass_403_tool(self) -> List[str]:
+        binary = shutil.which("bypass-403")
+        if binary:
+            return [binary]
+
+        repo_dir = Path("tools") / "bypass-403"
+        script = repo_dir / "bypass-403.sh"
+        if not script.exists():
+            repo_dir.parent.mkdir(parents=True, exist_ok=True)
+            result = self.runner.run(
+                tool_name="git",
+                cmd=["git", "clone", "https://github.com/iamj0ker/bypass-403.git", str(repo_dir)],
+                target="bypass-403",
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+            if result.return_code != 0 and not script.exists():
+                return []
+
+        if not script.exists():
+            return []
+
+        local_bin = Path.home() / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+        link_path = local_bin / "bypass-403"
+        if not link_path.exists() and not link_path.is_symlink():
+            try:
+                if os.name == "nt":
+                    wrapper = local_bin / "bypass-403.cmd"
+                    wrapper.write_text(
+                        f'@echo off\r\nbash "{script.resolve()}" %*\r\n',
+                        encoding="utf-8",
+                    )
+                else:
+                    os.symlink(str(script.resolve()), str(link_path))
+            except OSError:
+                pass
+
+        binary = shutil.which("bypass-403") or shutil.which("bypass-403.cmd")
+        if binary:
+            return [binary]
+
+        bash = shutil.which("bash")
+        if bash:
+            return [bash, str(script.resolve())]
+        sh = shutil.which("sh")
+        if sh:
+            return [sh, str(script.resolve())]
+
+        return []
+
+
+class HiddenParamScanner(_ScannerBase):
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("x8"):
+            return
+
+        self.logger.info("Discovering hidden parameters with x8...")
+        wordlist = self._wordlist_path()
+        for url in self._live_urls(target)[:20]:
+            result = self.runner.run(
+                tool_name="x8",
+                cmd=["x8", "-u", url, "--wordlist", str(wordlist)],
+                target=url,
+                timeout=120,
+                save_raw=False,
+                check_exists=False,
+            )
+            output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
+            if not output:
+                continue
+            for line in output.splitlines():
+                if "Parameter found" in line:
+                    target.hidden_params.append({"url": url, "param": line.strip()})
+
+    @staticmethod
+    def _wordlist_path() -> Path:
+        seclists = Path("/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt")
+        if seclists.exists():
+            return seclists
+
+        path = Path("config") / "parameter_names.txt"
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                "\n".join([
+                    "id", "user", "account", "token", "redirect", "next", "page",
+                    "lang", "search", "q", "debug", "role", "admin", "filter",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+        return path
+
+
+class SchemaFuzzer(_ScannerBase):
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("schemathesis"):
+            return
+
+        schema_urls = self._schema_urls(target)
+        if not schema_urls:
+            return
+
+        for url in schema_urls[:5]:
+            result = self.runner.run(
+                tool_name="schemathesis",
+                cmd=["schemathesis", "run", "--checks", "all", "--output-format", "json", url],
+                target=url,
+                timeout=600,
+                save_raw=False,
+                check_exists=False,
+            )
+            output = (result.stdout or "").strip()
+            if not output:
+                continue
+            try:
+                results = json.loads(output)
+            except json.JSONDecodeError:
+                continue
+
+            has_failures = False
+            if isinstance(results, dict):
+                has_failures = bool(results.get("has_failures"))
+            elif isinstance(results, list):
+                has_failures = any(
+                    isinstance(item, dict) and bool(item.get("has_failures"))
+                    for item in results
+                )
+
+            if has_failures:
+                target.api_schema_findings.append({"schema_url": url, "results": results})
+
+    @staticmethod
+    def _schema_urls(target: TargetContext) -> List[str]:
+        schema_names = {"swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml"}
+        urls: List[str] = []
+        seen = set()
+        for disc in target.info_disclosures:
+            if not isinstance(disc, dict):
+                continue
+            path = str(disc.get("path", ""))
+            if path not in schema_names:
+                continue
+            base_url = str(disc.get("url", ""))
+            if not base_url:
+                continue
+            schema_url = f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+            if schema_url not in seen:
+                seen.add(schema_url)
+                urls.append(schema_url)
+        return urls
+
+
+class MassAssignmentScanner(_ScannerBase):
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("nuclei"):
+            return
+
+        live_urls = self._write_live_urls_file(target)
+        raw = self._raw_dir() / f"nuclei_mass_assignment_{target.domain}.jsonl"
+        self.runner.run(
+            tool_name="nuclei",
+            cmd=[
+                "nuclei", "-l", str(live_urls), "-t", "mass-assignment/",
+                "-jsonl", "-o", str(raw), "-silent",
+            ],
+            target=target.domain,
+            timeout=600,
+            save_raw=False,
+            check_exists=False,
+        )
+        self._append_jsonl_findings(raw, target.mass_assignment_findings)
+
+
+class DASTFuzzingScanner(_ScannerBase):
+    """
+    Run nuclei's DAST / fuzzing templates against parameterized URLs harvested
+    from gau / waybackurls / katana.
+
+    This is the highest-yield bug-bounty surface: it actively fuzzes query
+    parameters for reflected XSS, SQLi, SSTI, LFI/path-traversal, open redirect,
+    CRLF, SSRF (OAST), and more, using nuclei's `-dast` engine. Detection only —
+    no destructive exploitation tags are run.
+    """
+
+    def __init__(self, logger, runner: CommandRunner, max_urls: int = 1500) -> None:
+        super().__init__(logger, runner)
+        self.max_urls = max_urls
+
+    def scan(self, target: TargetContext) -> None:
+        if not shutil.which("nuclei"):
+            return
+
+        param_urls = self._param_urls(target, limit=self.max_urls)
+        if not param_urls:
+            self.logger.info("DAST: no parameterized URLs to fuzz; skipping")
+            return
+
+        url_file = self._parsed_dir() / f"dast_urls_{target.domain}.txt"
+        url_file.write_text("\n".join(param_urls), encoding="utf-8")
+        url_file = self._dedupe_params(url_file, target.domain)
+        self.logger.info("DAST fuzzing parameterized URLs with nuclei...")
+
+        raw = self._raw_dir() / f"nuclei_dast_{target.domain}.jsonl"
+        self.runner.run(
+            tool_name="nuclei",
+            cmd=[
+                "nuclei", "-l", str(url_file),
+                "-dast",
+                "-jsonl", "-o", str(raw), "-silent",
+                "-rate-limit", "50",
+                "-exclude-tags", "dos,brute-force,bruteforce,intrusive,destructive,exploit",
+            ],
+            target=target.domain,
+            timeout=1800,
+            save_raw=False,
+            check_exists=False,
+        )
+        self._append_jsonl_findings(raw, target.dast_findings)
+        self.logger.info("DAST fuzzing complete: %d findings", len(target.dast_findings))
+
+    def _dedupe_params(self, url_file: Path, domain: str) -> Path:
+        """Collapse near-duplicate parameterized URLs with uro when available."""
+        if not shutil.which("uro"):
+            return url_file
+        deduped = self._parsed_dir() / f"dast_urls_{domain}_uro.txt"
+        self.runner.run(
+            tool_name="uro",
+            cmd=["uro", "-i", str(url_file), "-o", str(deduped)],
+            target="dast-dedupe",
+            timeout=120,
+            save_raw=False,
+            check_exists=False,
+        )
+        if deduped.exists() and deduped.stat().st_size > 0:
+            return deduped
+        return url_file

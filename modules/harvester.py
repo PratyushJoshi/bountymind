@@ -163,6 +163,15 @@ class URLHarvester:
         """Return deduplicated list of JS file URLs from harvested results."""
         return list({r.url for r in harvested if r.is_js})
 
+    def collect_js_urls(self, target) -> List[str]:
+        """Collect JS URLs from a scan session (alias used by PrototypePollutionScanner)."""
+        urls = self.get_js_urls(getattr(target, "harvested_urls", []) or [])
+        for host in getattr(target, "live_hosts", []) or []:
+            url = host.get("url") if isinstance(host, dict) else getattr(host, "url", None)
+            if url and url.lower().endswith(".js"):
+                urls.append(url)
+        return list(dict.fromkeys(urls))
+
     # ------------------------------------------------------------------
     # Tool runners
     # ------------------------------------------------------------------
