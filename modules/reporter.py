@@ -1405,47 +1405,175 @@ class ReportGenerator:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-          max-width: 1200px; margin: 0 auto; padding: 2rem; background: #0d1117; color: #c9d1d9; }}
-  h1 {{ color: #58a6ff; border-bottom: 2px solid #21262d; padding-bottom: 0.5rem; }}
-  h2 {{ color: #79c0ff; border-bottom: 1px solid #21262d; padding-bottom: 0.25rem; margin-top: 2rem; }}
-  h3 {{ color: #d2a8ff; }}
-  h4 {{ color: #ffa657; }}
-  table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-  th {{ background: #161b22; color: #58a6ff; padding: 0.5rem; text-align: left; border: 1px solid #30363d; }}
-  td {{ padding: 0.4rem 0.5rem; border: 1px solid #21262d; vertical-align: top; }}
-  tr:nth-child(even) {{ background: #161b22; }}
-    .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin: 1rem 0 1.5rem; }}
-    .metric-card {{ background: linear-gradient(180deg, #161b22, #0d1117); border: 1px solid #30363d; border-radius: 10px; padding: 0.9rem 1rem; box-shadow: 0 6px 20px rgba(0,0,0,0.15); }}
-    .metric-card h3 {{ margin: 0 0 0.35rem; font-size: 0.85rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .metric-card .value {{ font-size: 1.7rem; font-weight: 700; color: #f0f6fc; line-height: 1; }}
-    .findings-list {{ margin: 0.75rem 0 0; padding-left: 1.2rem; }}
-    .finding-item.critical {{ color: #ff7b72; }}
-    .finding-item.high {{ color: #ffa657; }}
-    .finding-item.medium {{ color: #e3b341; }}
-    .finding-item.info {{ color: #79c0ff; }}
-  code, pre {{ background: #161b22; padding: 0.2rem 0.4rem; border-radius: 4px;
-               font-family: 'Courier New', monospace; color: #a5d6ff; }}
-  pre {{ padding: 1rem; overflow-x: auto; }}
-  blockquote {{ border-left: 4px solid #388bfd; padding: 0.5rem 1rem;
-                background: #161b22; margin: 1rem 0; color: #8b949e; }}
-  hr {{ border: none; border-top: 1px solid #21262d; margin: 2rem 0; }}
-  a {{ color: #58a6ff; }}
-  .banner {{ background: #1c1f26; border: 1px solid #f0883e;
-             padding: 1rem; border-radius: 6px; margin-bottom: 2rem; color: #f0883e; }}
-  section {{ margin: 2rem 0; padding: 1rem 0; border-top: 1px solid #21262d; }}
+  :root {{
+    --bg: #000000;
+    --surface: #1c1c1e;
+    --surface-2: #2c2c2e;
+    --border: #3a3a3c;
+    --text: #f5f5f7;
+    --text-dim: #86868b;
+    --accent: #30d158;
+    --accent-dim: #1c4228;
+    --cyan: #64d2ff;
+    --purple: #bf5af2;
+    --orange: #ff9f0a;
+    --red: #ff453a;
+    --yellow: #ffd60a;
+    --mono: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: var(--sans);
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 2.5rem 2rem 3rem;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }}
+  h1 {{
+    color: var(--text);
+    font-size: 1.75rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+    margin-bottom: 1.5rem;
+  }}
+  h2 {{
+    color: var(--accent);
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--surface-2);
+    padding-bottom: 0.35rem;
+    margin-top: 2.5rem;
+  }}
+  h3 {{ color: var(--cyan); font-weight: 600; font-size: 1rem; }}
+  h4 {{ color: var(--orange); font-weight: 600; }}
+  table {{
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    margin: 1rem 0;
+    font-size: 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }}
+  th {{
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.65rem 0.85rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }}
+  td {{
+    padding: 0.55rem 0.85rem;
+    border-bottom: 1px solid var(--surface-2);
+    vertical-align: top;
+  }}
+  tr:last-child td {{ border-bottom: none; }}
+  tr:nth-child(even) td {{ background: rgba(28, 28, 30, 0.55); }}
+  .metrics-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.65rem;
+    margin: 1.25rem 0 1.75rem;
+  }}
+  .metric-card {{
+    background: linear-gradient(145deg, var(--surface) 0%, rgba(28,28,30,0.6) 100%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+    backdrop-filter: blur(8px);
+  }}
+  .metric-card h3 {{
+    margin: 0 0 0.4rem;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+  }}
+  .metric-card .value {{
+    font-size: 1.65rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }}
+  .findings-list {{ margin: 0.75rem 0 0; padding-left: 1.1rem; }}
+  .finding-item {{ margin: 0.35rem 0; padding: 0.15rem 0; }}
+  .finding-item.critical {{ color: var(--red); }}
+  .finding-item.high {{ color: var(--orange); }}
+  .finding-item.medium {{ color: var(--yellow); }}
+  .finding-item.info {{ color: var(--cyan); }}
+  code, pre, .code {{
+    background: var(--surface);
+    padding: 0.15rem 0.45rem;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 0.85em;
+    color: var(--accent);
+    border: 1px solid var(--surface-2);
+  }}
+  pre {{
+    padding: 1rem 1.1rem;
+    overflow-x: auto;
+    border-radius: 12px;
+    line-height: 1.45;
+  }}
+  blockquote {{
+    border-left: 3px solid var(--accent);
+    padding: 0.65rem 1rem;
+    background: var(--surface);
+    margin: 1rem 0;
+    color: var(--text-dim);
+    border-radius: 0 10px 10px 0;
+  }}
+  hr {{ border: none; border-top: 1px solid var(--surface-2); margin: 2.5rem 0; }}
+  a {{ color: var(--cyan); text-decoration: none; }}
+  a:hover {{ text-decoration: underline; }}
+  .banner {{
+    background: linear-gradient(135deg, rgba(48,209,88,0.08) 0%, var(--surface) 100%);
+    border: 1px solid var(--accent-dim);
+    padding: 0.85rem 1.1rem;
+    border-radius: 14px;
+    margin-bottom: 2rem;
+    color: var(--accent);
+    font-size: 0.88rem;
+    letter-spacing: 0.01em;
+  }}
+  section {{
+    margin: 2rem 0;
+    padding: 1.25rem 0 0;
+    border-top: 1px solid var(--surface-2);
+  }}
+  .report-footer {{
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    text-align: center;
+    letter-spacing: 0.03em;
+  }}
 </style>
 </head>
 <body>
 <div class="banner">
-⚠️ AUTHORIZED USE ONLY — This report contains sensitive security assessment data.
-Handle in accordance with your organization's data classification policy.
+  authorized use only — sensitive security assessment data. handle per your org classification policy.
 </div>
 {body}
 <hr>
-<p style="color: #8b949e; font-size: 0.85rem; text-align: center;">
-Generated by BountyMind | Session {html.escape(session.session_id)}
-| {html.escape(session.start_time.strftime('%Y-%m-%d %H:%M UTC'))}
+<p class="report-footer">
+  BountyMind · session {html.escape(session.session_id)}
+  · {html.escape(session.start_time.strftime('%Y-%m-%d %H:%M UTC'))}
 </p>
 </body>
 </html>

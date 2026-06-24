@@ -37,17 +37,6 @@ from utils.runner import CommandRunner
 
 log = get_logger("main")
 
-BANNER = r"""
- ____                         _____                                           _
-|  _ \ ___  ___ ___  _ __   |  ___| __ __ _ _ __ ___   _____      _____  _ __| | __
-| |_) / _ \/ __/ _ \| '_ \  | |_ | '__/ _` | '_ ` _ \ / _ \ \ /\ / / _ \| '__| |/ /
-|  _ <  __/ (_| (_) | | | | |  _|| | | (_| | | | | | |  __/\ V  V / (_) | |  |   <
-|_| \_\___|\___\___/|_| |_| |_|  |_|  \__,_|_| |_| |_|\___| \_/\_/ \___/|_|  |_|\_\
-
-  BountyMind — Automated Recon, Vuln Assessment & WAF Evasion
-  Authorized use only | Non-intrusive | Unauthenticated by default
-"""
-
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -262,13 +251,10 @@ def validate_targets(raw_targets: List[str]) -> List[str]:
 
 def print_banner(progress: ProgressManager) -> None:
     try:
-        from utils.progress import console, RICH_AVAILABLE
-        if RICH_AVAILABLE:
-            console.print(BANNER, style="bold cyan")
-        else:
-            print(BANNER)
+        from utils.progress import render_banner
+        render_banner()
     except Exception:
-        print(BANNER)
+        print("\n  BOUNTYMIND — automated recon & bug hunting\n")
 
 
 def _resolve_config_path(cli_config: str | None) -> Path:

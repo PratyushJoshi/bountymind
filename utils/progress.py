@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from typing import Generator, Optional
 
 try:
+    from rich import box
     from rich.console import Console
     from rich.live import Live
     from rich.panel import Panel
@@ -30,10 +31,30 @@ try:
     )
     from rich.table import Table
     from rich.text import Text
+    from rich.theme import Theme
 
     RICH_AVAILABLE = True
 except ImportError:
     RICH_AVAILABLE = False
+
+
+# Terminal palette — dark, minimal, Apple-clean with hacker green accents
+_UI_THEME = Theme({
+    "banner.title": "bold #30d158",
+    "banner.sub": "dim #86868b",
+    "banner.accent": "#64d2ff",
+    "phase.title": "bold #e5e5ea",
+    "phase.dim": "dim #636366",
+    "info": "#64d2ff",
+    "ok": "#30d158",
+    "warn": "#ffd60a",
+    "err": "#ff453a",
+    "finding.critical": "bold #ff453a",
+    "finding.high": "#ff9f0a",
+    "finding.medium": "#ffd60a",
+    "finding.low": "#64d2ff",
+    "finding.info": "dim #86868b",
+}) if RICH_AVAILABLE else None
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +62,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 if RICH_AVAILABLE:
-    console = Console(stderr=False)
+    console = Console(stderr=False, theme=_UI_THEME, highlight=False)
 else:
     # Minimal shim
     class _FallbackConsole:  # type: ignore[no-untyped-def]
@@ -55,6 +76,33 @@ else:
             print(*args)
 
     console = _FallbackConsole()  # type: ignore[assignment]
+
+
+def render_banner() -> None:
+    """Minimal startup banner — dark terminal x Apple typography."""
+    if not RICH_AVAILABLE:
+        print(
+            "\n  BOUNTYMIND\n"
+            "  automated recon · vuln assessment · waf evasion\n"
+            "  authorized use only\n"
+        )
+        return
+
+    art = Text.assemble(
+        ("  BOUNTY", "banner.title"),
+        ("MIND", "bold white"),
+        ("\n", ""),
+        ("  recon  ·  vuln  ·  evasion  ·  deep detection", "banner.sub"),
+    )
+    console.print(
+        Panel(
+            art,
+            border_style="#30d158",
+            box=box.ROUNDED,
+            padding=(0, 2),
+            subtitle="[banner.sub]authorized targets only · unauthenticated by default[/banner.sub]",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -101,28 +149,35 @@ class PhaseTracker:
             return "\n".join(lines)
 
         status_style = {
-            "pending": "dim",
-            "running": "bold yellow",
-            "done": "bold green",
-            "skipped": "dim italic",
-            "error": "bold red",
+            "pending": "phase.dim",
+            "running": "bold #ffd60a",
+            "done": "bold #30d158",
+            "skipped": "dim italic #636366",
+            "error": "bold #ff453a",
         }
-        table = Table(title="Live Scan Progress", show_header=True, header_style="bold cyan")
-        table.add_column("Phase", style="white", width=28)
-        table.add_column("Status", width=10)
-        table.add_column("Detail", style="dim")
+        table = Table(
+            title="[phase.title]SCAN PIPELINE[/phase.title]",
+            show_header=True,
+            header_style="bold #64d2ff",
+            box=box.SIMPLE_HEAD,
+            border_style="#2c2c2e",
+            padding=(0, 1),
+        )
+        table.add_column("Phase", style="white", width=28, no_wrap=True)
+        table.add_column("Status", width=12, no_wrap=True)
+        table.add_column("Detail", style="phase.dim", overflow="ellipsis", max_width=52)
         for info in self._states.values():
             style = status_style.get(info["status"], "white")
             icon = {
-                "pending": "○",
-                "running": "◉",
-                "done": "✓",
-                "skipped": "—",
-                "error": "✗",
+                "pending": ".",
+                "running": ">",
+                "done": "+",
+                "skipped": "-",
+                "error": "!",
             }.get(info["status"], "·")
             table.add_row(
                 info["label"],
-                Text(f"{icon} {info['status']}", style=style),
+                Text(f" {icon}  {info['status']}", style=style),
                 info["detail"][:60],
             )
         return table
@@ -151,11 +206,16 @@ class ProgressManager:
 
         if RICH_AVAILABLE:
             self._progress = Progress(
-                SpinnerColumn(),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(bar_width=30),
+                SpinnerColumn(spinner_name="dots", style="#30d158"),
+                TextColumn("[bold #e5e5ea]{task.description}"),
+                BarColumn(
+                    bar_width=36,
+                    complete_style="#30d158",
+                    finished_style="#30d158",
+                    pulse_style="#1c4228",
+                ),
                 MofNCompleteColumn(),
-                TextColumn("[dim]{task.fields[status]}"),
+                TextColumn("[phase.dim]{task.fields[status]}"),
                 TimeElapsedColumn(),
                 console=console,
                 transient=False,
@@ -167,9 +227,23 @@ class ProgressManager:
         """Context manager that renders the progress panel for the scan session."""
         if RICH_AVAILABLE and self._progress:
             with self._progress:
-                console.rule(f"[bold cyan]{title}")
+                console.print(
+                    Panel(
+                        Text(title, style="bold #e5e5ea"),
+                        border_style="#30d158",
+                        box=box.ROUNDED,
+                        padding=(0, 2),
+                    )
+                )
                 yield
-            console.rule("[bold cyan]Scan Complete")
+            console.print(
+                Panel(
+                    "[ok]+[/ok]  [bold #e5e5ea]scan complete[/bold #e5e5ea]",
+                    border_style="#2c2c2e",
+                    box=box.ROUNDED,
+                    padding=(0, 2),
+                )
+            )
         else:
             print(f"\n{'=' * 70}")
             print(f"  {title}")
@@ -214,35 +288,35 @@ class ProgressManager:
     @staticmethod
     def print_info(msg: str) -> None:
         if RICH_AVAILABLE:
-            console.print(f"[cyan]  ℹ  {msg}[/cyan]")
+            console.print(f"[info]  *[/info]  {msg}")
         else:
             print(f"  INFO: {msg}")
 
     @staticmethod
     def print_success(msg: str) -> None:
         if RICH_AVAILABLE:
-            console.print(f"[green]  ✓  {msg}[/green]")
+            console.print(f"[ok]  +[/ok]  {msg}")
         else:
             print(f"  OK: {msg}")
 
     @staticmethod
     def print_warning(msg: str) -> None:
         if RICH_AVAILABLE:
-            console.print(f"[yellow]  ⚠  {msg}[/yellow]")
+            console.print(f"[warn]  ![/warn]  {msg}")
         else:
             print(f"  WARN: {msg}")
 
     @staticmethod
     def print_error(msg: str) -> None:
         if RICH_AVAILABLE:
-            console.print(f"[red]  ✗  {msg}[/red]")
+            console.print(f"[err]  x[/err]  {msg}")
         else:
             print(f"  ERROR: {msg}")
 
     @staticmethod
     def print_phase(phase: str) -> None:
         if RICH_AVAILABLE:
-            console.rule(f"[bold magenta]Phase: {phase}")
+            console.rule(f"[bold #30d158]{phase.upper()}", style="#2c2c2e")
         else:
             print(f"\n--- Phase: {phase} ---\n")
 
@@ -255,48 +329,56 @@ class ProgressManager:
         """Print the simultaneous phase progress table."""
         table = self.phases.render_table()
         if RICH_AVAILABLE:
-            console.print(table)
+            console.print(Panel(table, border_style="#2c2c2e", box=box.ROUNDED, padding=(0, 1)))
         else:
             print(table)
 
     def print_usage(self) -> None:
         """Show quick CLI usage reference."""
-        usage = """
-[cyan bold]BountyMind CLI — Quick Reference[/cyan bold]
-
-  [green]bountymind -d example.com[/green]              Scan a single domain
-  [green]bountymind -l targets.txt[/green]               Scan domains from a list file
-  [green]bountymind -d example.com -v[/green]           Verbose output
-  [green]bountymind --check-env[/green]                  Verify tool installation
-  [green]bountymind --bootstrap[/green]                  Install missing tools only
-  [green]bountymind --update[/green]                     Self-update from GitHub
-  [green]bountymind --update-tools[/green]               Update tools & templates
-  [green]bountymind --help[/green]                       Full option list
-
-  Reports → output/reports/   Logs → logs/framework.log
-  Repository → https://github.com/PratyushJoshi/bountymind
-"""
-        if RICH_AVAILABLE:
-            console.print(usage)
-        else:
+        if not RICH_AVAILABLE:
             print(
                 "BountyMind CLI: bountymind -d DOMAIN | bountymind -l FILE | "
                 "bountymind --help"
             )
+            return
+
+        usage = Table(show_header=False, box=box.SIMPLE, border_style="#2c2c2e", padding=(0, 1))
+        usage.add_column("cmd", style="bold #30d158", no_wrap=True)
+        usage.add_column("desc", style="phase.dim")
+        commands = [
+            ("bountymind -d example.com", "scan a single domain"),
+            ("bountymind -l targets.txt", "scan from list file"),
+            ("bountymind --update", "self-update from GitHub"),
+            ("bountymind --bootstrap", "install missing tools"),
+            ("bountymind --check-env", "verify environment"),
+            ("bountymind --help", "full option list"),
+        ]
+        for cmd, desc in commands:
+            usage.add_row(cmd, desc)
+        console.print(
+            Panel(
+                usage,
+                title="[phase.title]quick reference[/phase.title]",
+                border_style="#2c2c2e",
+                box=box.ROUNDED,
+                subtitle="[phase.dim]reports → output/reports/  ·  logs → logs/framework.log[/phase.dim]",
+                padding=(0, 1),
+            )
+        )
 
     @staticmethod
     def print_finding(severity: str, target: str, msg: str) -> None:
         """Print a finding to console with severity-based coloring."""
         colors = {
-            "critical": "bold red",
-            "high": "red",
-            "medium": "yellow",
-            "low": "blue",
-            "info": "dim",
+            "critical": "finding.critical",
+            "high": "finding.high",
+            "medium": "finding.medium",
+            "low": "finding.low",
+            "info": "finding.info",
         }
         color = colors.get(severity.lower(), "white")
         if RICH_AVAILABLE:
-            console.print(f"[{color}]  [{severity.upper():8}] {target}: {msg}[/{color}]")
+            console.print(f"[{color}]  {severity.upper():8}[/{color}]  [white]{target}[/white]  [phase.dim]{msg}[/phase.dim]")
         else:
             print(f"  [{severity.upper():8}] {target}: {msg}")
 
@@ -312,7 +394,14 @@ class ProgressManager:
                 print("  " + "  ".join(str(c).ljust(col_width) for c in row))
             return
 
-        table = Table(title=title, show_header=True, header_style="bold cyan")
+        table = Table(
+            title=f"[phase.title]{title}[/phase.title]" if title else None,
+            show_header=True,
+            header_style="bold #64d2ff",
+            box=box.SIMPLE_HEAD,
+            border_style="#2c2c2e",
+            padding=(0, 1),
+        )
         for h in headers:
             table.add_column(h)
         for row in rows:
