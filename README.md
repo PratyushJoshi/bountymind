@@ -2,8 +2,6 @@
 
 **Automated Reconnaissance, Vulnerability Assessment & WAF Evasion Framework**
 
-Repository: [https://github.com/PratyushJoshi/bountymind](https://github.com/PratyushJoshi/bountymind)
-
 > **AUTHORIZED USE ONLY** — Run only against systems you own or have explicit written permission to test.
 
 ---
