@@ -53,7 +53,7 @@ prereq_fail() {
 }
 
 install_go_tarball() {
-    local archive="go1.22.4.linux-amd64.tar.gz"
+    local archive="go1.26.4.linux-amd64.tar.gz"
     info "Downloading Go from https://go.dev/dl/$archive ..."
     if have_cmd wget; then
         wget -q "https://go.dev/dl/$archive" -O "/tmp/$archive" || return 1
@@ -305,7 +305,6 @@ PYTHON_TOOLS=(
     "wafw00f"
     "arjun"
     "jwt_tool"
-    "tplmap"
     "schemathesis"   # API schema fuzzing (OpenAPI/Swagger logic + mass-assignment bugs)
 )
 
@@ -319,24 +318,6 @@ for tool in "${PYTHON_TOOLS[@]}"; do
             echo "[+]   $tool installed"
         else
             echo "[!]   $tool install failed (non-fatal)"
-            if [[ "$tool" == "tplmap" ]]; then
-                echo "[*]   Falling back to local tplmap wrapper ..."
-                TPLMAP_DIR="$SCRIPT_DIR/tools/tplmap"
-                if [ ! -d "$TPLMAP_DIR" ]; then
-                    git clone https://github.com/epinna/tplmap.git "$TPLMAP_DIR"
-                fi
-                if [ ! -d "$TPLMAP_DIR/venv" ]; then
-                    python3 -m venv "$TPLMAP_DIR/venv"
-                    "$TPLMAP_DIR/venv/bin/pip" install -q -r "$TPLMAP_DIR/requirements.txt" || true
-                fi
-                mkdir -p "$REAL_HOME/.local/bin"
-                cat > "$REAL_HOME/.local/bin/tplmap" <<EOF
-#!/bin/bash
-"$TPLMAP_DIR/venv/bin/python" "$TPLMAP_DIR/tplmap.py" "\$@"
-EOF
-                chmod +x "$REAL_HOME/.local/bin/tplmap"
-                echo "[+]   tplmap wrapper created"
-            fi
             continue
         fi
     fi
@@ -434,8 +415,11 @@ for crate in ppfuzz x8; do
         info "  $crate — already installed"
     else
         info "  cargo installing $crate ..."
+        # --locked honours each crate's published Cargo.lock so old crates
+        # (e.g. ppfuzz) build against the pinned deps they actually compile
+        # with; fall back to an unlocked resolve for crates without a lockfile.
         sudo -u "$REAL_USER" env HOME="$REAL_HOME" bash -lc \
-            "source \$HOME/.cargo/env 2>/dev/null; cargo install $crate" \
+            "source \$HOME/.cargo/env 2>/dev/null; cargo install --locked $crate || cargo install $crate" \
             && success "  $crate installed" || warn "  $crate failed (non-fatal)"
     fi
     # Expose cargo bin system-wide

@@ -175,7 +175,7 @@ sudo ./install.sh
 This installs:
 - **apt packages** — nmap, ffuf, amass, whatweb, wafw00f, sqlmap, golang
 - **Go tools** — subfinder, httpx, nuclei, dnsx, katana, naabu, gau, waybackurls, httprobe, subzy, gowitness, ffuf, dalfox
-- **pipx tools** — s3scanner, uro, xnlinkfinder, wafw00f, arjun, jwt_tool, tplmap, **schemathesis**
+- **pipx tools** — s3scanner, uro, xnlinkfinder, wafw00f, arjun, jwt_tool, **schemathesis**
 - **Rust/cargo tools** — **ppfuzz**, **x8** (installs Rust via rustup if missing)
 - **git-wrapped tools** — **smuggler**, **bypass-403**, SecretFinder, dirsearch
 - nuclei templates (incl. DAST/fuzzing templates) and registers `/usr/local/bin/bountymind`

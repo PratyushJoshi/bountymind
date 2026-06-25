@@ -1,22 +1,31 @@
 # =============================================================================
-# ReconFramework - Python Dependencies
+# BountyMind — Python Dependencies
 # =============================================================================
-# Core dependencies (required)
-PyYAML==6.0.1
+# Policy: pull the *latest* compatible release of every dependency on install,
+# never a stale exact pin. The lower bounds below are deliberately set with
+# `>=` and no upper cap, so pip always installs the most recent version that is
+# compatible with your interpreter — a fresh clone is never outdated.
+#
+# Refresh everything to the newest releases at any time with:
+#   pip install -U -r requirements.txt
+# =============================================================================
 
-# Terminal UI (strongly recommended — graceful fallback if absent)
-rich==13.7.1
+# Core (required) ------------------------------------------------------------
+PyYAML>=6.0.3
+requests>=2.32.0          # 2.34+ on Python 3.10+, 2.32.x on 3.9
 
-# HTML report rendering (optional — falls back to <pre> block if absent)
-Markdown==3.5.2
+# Terminal UI (strongly recommended — graceful fallback if absent) ----------
+rich>=14.0.0              # 15.x on Python 3.9+; newest pulled automatically
 
-# Typing backports (Python 3.8 compatibility)
-typing-extensions==4.9.0
+# HTML report rendering (optional — falls back to <pre> block if absent) ----
+Markdown>=3.7             # 3.10+ on Python 3.10+, 3.9 on Python 3.9
 
-# WAF detection & evasion (installed automatically by --bootstrap)
+# Typing backports (Python 3.9 compatibility) -------------------------------
+typing-extensions>=4.15.0
+
+# WAF detection & extra security tooling (also installed by --bootstrap) -----
 wafw00f>=2.2.0
 arjun>=2.2.1
-
 s3scanner>=1.0.0
 uro>=1.0.0
 xnlinkfinder>=1.0.0

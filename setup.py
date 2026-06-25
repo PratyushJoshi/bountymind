@@ -16,7 +16,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="bountymind",
-    version="2.0.0",
+    version="2.1.0",
     description=(
         "BountyMind — Modular automated reconnaissance, vulnerability assessment, "
         "WAF detection & evasion, JS secret mining, and cloud recon framework"
@@ -32,12 +32,14 @@ setup(
     },
     python_requires=">=3.9",
     packages=find_packages(exclude=["tests*", "tools*"]),
+    # Lower bounds use `>=` with no upper cap so a fresh install always pulls
+    # the latest interpreter-compatible release — never a stale pin.
     install_requires=[
-        "PyYAML>=6.0.1",
-        "rich>=13.7.1",
-        "Markdown>=3.5.2",
-        "requests>=2.31.0",
-        "typing-extensions>=4.9.0",
+        "PyYAML>=6.0.3",
+        "rich>=14.0.0",
+        "Markdown>=3.7",
+        "requests>=2.32.0",
+        "typing-extensions>=4.15.0",
     ],
     extras_require={
         "full": [
@@ -46,10 +48,10 @@ setup(
             "arjun>=2.2.1",
         ],
         "dev": [
-            "pytest>=7.0",
-            "black>=23.0",
-            "flake8>=6.0",
-            "mypy>=1.0",
+            "pytest>=8.0",
+            "black>=24.0",
+            "flake8>=7.0",
+            "mypy>=1.10",
         ],
     },
     entry_points={

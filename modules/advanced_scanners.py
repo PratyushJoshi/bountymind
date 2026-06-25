@@ -545,6 +545,10 @@ class JWTScanner(_ScannerBase):
 
 class SSTIScanner(_ScannerBase):
     def scan(self, target: TargetContext) -> None:
+        # tplmap is legacy Python 2 software and is no longer bootstrapped, so
+        # this scanner is a no-op unless a user supplies their own `tplmap` on
+        # PATH. Server-side template injection is still covered by the nuclei
+        # DAST fuzzing phase, which runs by default.
         if not shutil.which("tplmap"):
             return
         for url in self._live_urls(target)[:20]:

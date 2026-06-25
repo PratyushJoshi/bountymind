@@ -235,13 +235,6 @@ TOOL_REGISTRY: Dict[str, Dict] = {
         "version_flag": "--help",
         "notes": "JWT analysis and tamper testing utility",
     },
-    "tplmap": {
-        "go_module": "",
-        "apt_package": "",
-        "pip_package": "tplmap",
-        "version_flag": "--help",
-        "notes": "Template injection detector and exploitation helper",
-    },
     "sqlmap": {
         "go_module": "",
         "apt_package": "sqlmap",
@@ -265,7 +258,6 @@ PYTHON_PIPX_TOOLS: Dict[str, str] = {
     "wafw00f": "wafw00f",
     "arjun": "arjun",
     "jwt_tool": "jwt_tool",
-    "tplmap": "tplmap",
 }
 
 # High-bounty optional Python scanners installed via pipx/pip during bootstrap.
@@ -320,7 +312,7 @@ CORE_ENV_TOOLS: List[str] = [
 ]
 
 OPTIONAL_ENV_TOOLS: List[str] = [
-    "dalfox", "sqlmap", "trufflehog", "jwt_tool", "tplmap",
+    "dalfox", "sqlmap", "trufflehog", "jwt_tool",
     "smuggler", "ppfuzz", "x8", "schemathesis", "bypass-403",
 ]
 
@@ -555,7 +547,7 @@ class ToolUpdater:
             return
 
         self._progress.print_info("Installing Go from golang.org...")
-        archive = "go1.22.4.linux-amd64.tar.gz"
+        archive = "go1.26.4.linux-amd64.tar.gz"
         url = f"https://go.dev/dl/{archive}"
         tmp = Path("/tmp") / archive
         if shutil.which("wget"):
@@ -837,8 +829,6 @@ class ToolUpdater:
                 self._progress.print_success(f"Installed {tool}")
             else:
                 self._progress.print_warning(f"Failed to install {tool}")
-                if tool == "tplmap":
-                    self._bootstrap_tplmap_fallback(dry_run=dry_run)
 
     def _bootstrap_pipx_advanced_tools(self, dry_run: bool = False) -> None:
         """Install optional high-bounty Python scanners via pipx/pip."""
@@ -952,23 +942,42 @@ class ToolUpdater:
             if self._tool_available(tool):
                 continue
             if dry_run:
-                self._progress.print_info(f"Would cargo install {crate}")
+                self._progress.print_info(f"Would cargo install --locked {crate}")
                 continue
             self._progress.print_info(f"cargo installing {tool}...")
+            # Older crates (notably ppfuzz) only build against the dependency
+            # versions pinned in their published Cargo.lock. With an unlocked
+            # resolve, cargo pulls newer transitive deps (e.g. clap 3/4) that
+            # dropped the APIs they rely on (the crate_*/yaml macros), so the
+            # build fails. Install with --locked first to honour that lockfile,
+            # then fall back to an unlocked resolve for crates shipped without
+            # a Cargo.lock.
             result = self._runner.run(
                 tool_name="cargo",
-                cmd=["cargo", "install", crate],
+                cmd=["cargo", "install", "--locked", crate],
                 target=tool,
                 timeout=900,
                 save_raw=False,
                 check_exists=False,
             )
-            if result.return_code == 0:
+            if result.return_code != 0 and not self._tool_available(tool):
+                self._progress.print_info(f"retrying {tool} without --locked...")
+                result = self._runner.run(
+                    tool_name="cargo",
+                    cmd=["cargo", "install", crate],
+                    target=tool,
+                    timeout=900,
+                    save_raw=False,
+                    check_exists=False,
+                )
+            if result.return_code == 0 or self._tool_available(tool):
                 # cargo installs to ~/.cargo/bin — make sure that's on PATH
                 self._ensure_cargo_on_path()
                 self._progress.print_success(f"Installed {tool}")
             else:
-                self._progress.print_warning(f"Failed to install {tool} (optional)")
+                self._progress.print_warning(
+                    f"Failed to install {tool} (optional — scanner will be skipped)"
+                )
 
     def _ensure_cargo_on_path(self) -> None:
         cargo_bin = Path.home() / ".cargo" / "bin"
@@ -1025,62 +1034,6 @@ class ToolUpdater:
                 pass
         self._ensure_pipx_on_path()
         self._progress.print_success("smuggler ready (local wrapper)")
-
-    def _bootstrap_tplmap_fallback(self, dry_run: bool = False) -> None:
-        """Install tplmap from GitHub if pipx/pip installation is unavailable."""
-        tplmap_dir = Path("tools") / "tplmap"
-        venv_dir = tplmap_dir / "venv"
-        wrapper = Path.home() / ".local" / "bin" / "tplmap"
-
-        if dry_run:
-            self._progress.print_info("Would clone tplmap and create a local wrapper")
-            return
-
-        if not tplmap_dir.exists():
-            self._progress.print_info("Cloning tplmap repository...")
-            result = self._runner.run(
-                tool_name="git",
-                cmd=["git", "clone", "https://github.com/epinna/tplmap.git", str(tplmap_dir)],
-                target="tplmap",
-                timeout=120,
-                save_raw=False,
-                check_exists=False,
-            )
-            if result.return_code != 0:
-                self._progress.print_warning("tplmap clone failed")
-                return
-
-        if not venv_dir.exists():
-            self._runner.run(
-                tool_name="python3",
-                cmd=["python3", "-m", "venv", str(venv_dir)],
-                target="tplmap-venv",
-                timeout=60,
-                save_raw=False,
-                check_exists=False,
-            )
-
-        pip_bin = venv_dir / "bin" / "pip"
-        req_file = tplmap_dir / "requirements.txt"
-        if pip_bin.exists() and req_file.exists():
-            self._runner.run(
-                tool_name="pip",
-                cmd=[str(pip_bin), "install", "-r", str(req_file)],
-                target="tplmap-deps",
-                timeout=180,
-                save_raw=False,
-                check_exists=False,
-            )
-
-        wrapper.parent.mkdir(parents=True, exist_ok=True)
-        script = (
-            "#!/bin/bash\n"
-            f"{str((venv_dir / 'bin' / 'python').resolve())} {str((tplmap_dir / 'tplmap.py').resolve())} \"$@\"\n"
-        )
-        wrapper.write_text(script, encoding="utf-8")
-        os.chmod(wrapper, 0o755)
-        self._ensure_pipx_on_path()
-        self._progress.print_success("tplmap ready (local wrapper)")
 
     def _bootstrap_sqlmap(self, dry_run: bool = False) -> None:
         if not self._platform.is_linux or not self._platform.has_apt:
@@ -1251,7 +1204,6 @@ class ToolUpdater:
             "arjun": "arjun",
             "s3scanner": "s3scanner",
             "jwt_tool": "jwt_tool",
-            "tplmap": "tplmap",
         }
         use_pipx = shutil.which("pipx") is not None
         if use_pipx:
@@ -1318,8 +1270,6 @@ class ToolUpdater:
                 self._progress.print_warning(
                     f"Failed to install {tool_name}. Run manually: {hint}"
                 )
-                if tool_name == "tplmap":
-                    self._bootstrap_tplmap_fallback(dry_run=dry_run)
 
         # Rust + git-based high-bounty scanners (correct install methods)
         self._bootstrap_cargo_tools(dry_run=dry_run)
