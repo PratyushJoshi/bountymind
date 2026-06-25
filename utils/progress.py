@@ -1,39 +1,47 @@
 """
 utils/progress.py
 -----------------
-BountyMind terminal UI — a live, in-place scan dashboard built on Rich.
+BountyMind terminal UI — professional hacker-grade dashboard.
 
-Design goals (v2.1 UI):
-- A single persistent ``Live`` surface renders the whole scan pipeline in place
-  instead of spamming the scrollback with a new panel on every status change.
-- The pipeline shows every phase with an animated state marker, a result detail
-  column and a per-phase elapsed timer, plus an embedded progress region for the
-  currently-running task(s).
-- Log-style messages (info/success/warning/error/findings) print cleanly *above*
-  the live dashboard so history is preserved while the dashboard stays pinned.
-- Everything degrades gracefully to plain ``print`` when Rich is unavailable.
+Renders cleanly on every shell:
+  · bash / zsh  (Kali, Ubuntu, macOS)       — full 24-bit color + Unicode
+  · Windows Terminal / modern PowerShell     — full ANSI + Unicode
+  · Legacy CMD / old PowerShell (no ANSI)   — ASCII-only, auto-detected
+  · Rich not installed                       — plain timestamped text
 
-Public surface (kept stable for the rest of the codebase):
+Log-line convention (same as Metasploit / Impacket):
+  [HH:MM:SS] [*]  informational
+  [HH:MM:SS] [+]  success / result
+  [HH:MM:SS] [!]  warning / non-fatal
+  [HH:MM:SS] [-]  error / fatal
+
+Public API (stable — all other modules depend on this interface):
     render_banner()
-    console                      (module-level Rich console / shim)
+    console                       (module-level Rich Console or plain shim)
     ProgressManager:
-        session(title)           context manager wrapping a scan
-        add_task / advance / update_status / complete_task
-        set_phase_status / refresh_dashboard
+        session(title)            context manager wrapping one scan session
+        add_task(desc, total)     → opaque task id
+        advance(tid, amount, status)
+        update_status(tid, status)
+        complete_task(tid, status)
+        set_phase_status(phase, status, detail)
+        refresh_dashboard()
         print_info / print_success / print_warning / print_error
         print_phase / print_usage / print_finding / print_summary_table
-        phases                   (PhaseTracker instance)
+        phases                    → PhaseTracker instance
 """
 
 from __future__ import annotations
 
+import datetime
+import os
+import re
 import time
 from contextlib import contextmanager
 from typing import Dict, Generator, List, Optional, Tuple
 
 try:
     from rich import box
-    from rich.align import Align
     from rich.console import Console, Group, RenderableType
     from rich.live import Live
     from rich.panel import Panel
@@ -50,151 +58,149 @@ try:
     from rich.text import Text
 
     RICH_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only without Rich installed
+except ImportError:  # pragma: no cover
     RICH_AVAILABLE = False
 
 
 APP_VERSION = "2.1.0"
 
 # ---------------------------------------------------------------------------
-# Palette — dark terminal, hacker-green primary with electric-cyan accents.
+# Colour palette  (one place to tune everything)
 # ---------------------------------------------------------------------------
-C_GREEN = "#30d158"
-C_CYAN = "#64d2ff"
-C_AMBER = "#ffd60a"
-C_ORANGE = "#ff9f0a"
-C_RED = "#ff453a"
-C_TEXT = "#e5e5ea"
-C_MUTED = "#86868b"
-C_DIM = "#636366"
-C_LINE = "#2c2c2e"
+C_GREEN  = "#30d158"   # primary accent  — hacker green
+C_CYAN   = "#64d2ff"   # secondary accent — electric cyan
+C_AMBER  = "#ffd60a"   # warning / in-progress
+C_ORANGE = "#ff9f0a"   # high severity
+C_RED    = "#ff453a"   # critical / error
+C_TEXT   = "#e5e5ea"   # main foreground
+C_MUTED  = "#8e8e93"   # secondary text
+C_DIM    = "#636366"   # dim / placeholders
+C_LINE   = "#3a3a3c"   # panel borders / rule lines
 
-_UI_THEME = (
-    {
-        "banner.title": f"bold {C_GREEN}",
-        "banner.sub": f"dim {C_MUTED}",
-        "banner.accent": C_CYAN,
-        "phase.title": f"bold {C_TEXT}",
-        "phase.dim": f"dim {C_DIM}",
-        "info": C_CYAN,
-        "ok": C_GREEN,
-        "warn": C_AMBER,
-        "err": C_RED,
-        "finding.critical": f"bold {C_RED}",
-        "finding.high": C_ORANGE,
-        "finding.medium": C_AMBER,
-        "finding.low": C_CYAN,
-        "finding.info": f"dim {C_MUTED}",
-    }
-)
+# Braille spinner animation — synced to wall clock, no state needed
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+# ---------------------------------------------------------------------------
+# Console — auto-detects terminal capabilities at import time
+# ---------------------------------------------------------------------------
 
 if RICH_AVAILABLE:
     from rich.theme import Theme
 
-    console: object = Console(theme=Theme(_UI_THEME), highlight=False)
+    _THEME = Theme({
+        "info":             C_CYAN,
+        "ok":               C_GREEN,
+        "warn":             C_AMBER,
+        "err":              C_RED,
+        "finding.critical": f"bold {C_RED}",
+        "finding.high":     C_ORANGE,
+        "finding.medium":   C_AMBER,
+        "finding.low":      C_CYAN,
+        "finding.info":     f"dim {C_MUTED}",
+    })
+
+    console = Console(theme=_THEME, highlight=False)
+
+    # Pick box style: Unicode rounded corners on color-capable terminals;
+    # pure-ASCII fallback on legacy CMD / redirected / dumb terminals.
+    _HAS_COLOR = getattr(console, "color_system", None) is not None
+    _BOX       = box.ROUNDED if _HAS_COLOR else box.ASCII
+    _BOX_TABLE = box.SIMPLE_HEAD
+
 else:
-
     class _FallbackConsole:  # type: ignore[no-redef]
-        """Minimal stand-in so the rest of the code can call console.print()."""
-
-        def print(self, *args, **kwargs):
-            text = " ".join(str(a) for a in args)
-            print(text)
-
-        def rule(self, title="", **kwargs):
-            print(f"\n{'=' * 24} {title} {'=' * 24}\n")
-
-        def log(self, *args, **kwargs):
+        """Minimal shim so the rest of the code can always call console.print()."""
+        def print(self, *args, **kwargs) -> None:
+            print(" ".join(str(a) for a in args))
+        def rule(self, title: str = "", **kwargs) -> None:
+            print(f"\n{'─' * 20}  {title}  {'─' * 20}\n")
+        def log(self, *args, **kwargs) -> None:
             print(*args)
 
-    console = _FallbackConsole()
+    console    = _FallbackConsole()  # type: ignore[assignment]
+    _HAS_COLOR = False
+    _BOX       = None
+    _BOX_TABLE = None
 
 
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def _ts() -> str:
+    """Wall-clock timestamp for log prefixes, e.g. ``[15:23:41]``."""
+    return datetime.datetime.now().strftime("[%H:%M:%S]")
 
 
-def _gradient(
-    text: str,
-    start: Tuple[int, int, int] = (48, 209, 88),
-    end: Tuple[int, int, int] = (100, 210, 255),
-    style: str = "bold",
-) -> "Text":
-    """Return a Rich Text with a per-character colour gradient (start → end)."""
-    out = Text()
-    n = max(len(text) - 1, 1)
-    for i, ch in enumerate(text):
-        r = int(start[0] + (end[0] - start[0]) * i / n)
-        g = int(start[1] + (end[1] - start[1]) * i / n)
-        b = int(start[2] + (end[2] - start[2]) * i / n)
-        out.append(ch, style=f"{style} #{r:02x}{g:02x}{b:02x}")
-    return out
+def _fmt_secs(secs: int) -> str:
+    """Human-readable elapsed duration."""
+    if secs >= 3600:
+        return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
+    if secs >= 60:
+        return f"{secs // 60}m{secs % 60:02d}s"
+    return f"{secs}s"
+
+
+def _strip_markup(s: str) -> str:
+    """Remove Rich markup tags (e.g. ``[cyan]``) from a string."""
+    return re.sub(r"\[/?[^\]]*\]", "", s)
 
 
 # ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
 
-_BANNER_ART = r"""
- ██████   ██████  ██    ██ ███    ██ ████████ ██    ██
- ██   ██ ██    ██ ██    ██ ████   ██    ██     ██  ██ 
- ██████  ██    ██ ██    ██ ██ ██  ██    ██      ████  
- ██   ██ ██    ██ ██    ██ ██  ██ ██    ██       ██   
- ██████   ██████   ██████  ██   ████    ██       ██   
-            ███    ███ ██ ███    ██ ██████
-            ████  ████ ██ ████   ██ ██   ██
-            ██ ████ ██ ██ ██ ██  ██ ██   ██
-            ██  ██  ██ ██ ██  ██ ██ ██   ██
-            ██      ██ ██ ██   ████ ██████
-""".strip("\n")
-
-
 def render_banner() -> None:
-    """Startup banner — gradient wordmark, tagline and safety chips."""
+    """
+    Compact operational header.  Works on every shell without degrading.
+
+    Rich terminal:
+        ╭── BOUNTYMIND v2.1.0 ────────────────────────────────────────────╮
+        │  Automated Reconnaissance · Vulnerability Assessment · Evasion  │
+        │  ▸ authorized targets only    ▸ unauthenticated · safe-mode     │
+        ╰─────────────────────────────────────────────────────────────────╯
+
+    Plain terminal:
+        ──────────────────────────────────────────────
+        BOUNTYMIND  v2.1.0
+        Automated Reconnaissance & Vulnerability Assessment
+        Use only against authorized targets
+        ──────────────────────────────────────────────
+    """
     if not RICH_AVAILABLE:
-        print(
-            "\n  BOUNTYMIND  v" + APP_VERSION + "\n"
-            "  recon · vuln assessment · waf evasion · deep detection\n"
-            "  authorized targets only · unauthenticated by default\n"
-        )
+        sep = "─" * 56
+        print(f"\n  {sep}")
+        print(f"  BOUNTYMIND  v{APP_VERSION}")
+        print("  Automated Reconnaissance & Vulnerability Assessment")
+        print("  Use only against authorized targets")
+        print(f"  {sep}\n")
         return
 
-    art = Text()
-    lines = _BANNER_ART.splitlines()
-    for idx, line in enumerate(lines):
-        # Vertical gradient: green at the top fading to cyan at the bottom.
-        t = idx / max(len(lines) - 1, 1)
-        r = int(48 + (100 - 48) * t)
-        g = int(209 + (210 - 209) * t)
-        b = int(88 + (255 - 88) * t)
-        art.append(line + "\n", style=f"bold #{r:02x}{g:02x}{b:02x}")
+    now = datetime.datetime.now().strftime("%Y-%m-%d  %H:%M")
+
+    wordmark = Text()
+    wordmark.append("BOUNTY", style=f"bold {C_GREEN}")
+    wordmark.append("MIND",   style=f"bold {C_CYAN}")
+    wordmark.append(f"  v{APP_VERSION}", style=f"dim {C_DIM}")
+    wordmark.append(f"   ─   {now}",    style=f"dim {C_DIM}")
 
     tagline = Text(
-        "recon › vulns › secrets › waf evasion › deep detection",
-        style=f"italic {C_MUTED}",
+        "Automated Reconnaissance · Vulnerability Assessment · WAF Evasion",
+        style=C_MUTED,
     )
+
     chips = Text()
-    chips.append("  ◆ authorized targets only  ", style=f"{C_GREEN}")
-    chips.append("  ◆ unauthenticated · safe-mode  ", style=f"{C_CYAN}")
+    chips.append("▸ ", style=C_GREEN)
+    chips.append("authorized targets only     ", style=C_DIM)
+    chips.append("▸ ", style=C_CYAN)
+    chips.append("unauthenticated  ·  safe-mode", style=C_DIM)
 
-    meta = Text()
-    meta.append("v", style=C_DIM)
-    meta.append(APP_VERSION, style=f"bold {C_CYAN}")
-    meta.append("  ·  ", style=C_DIM)
-    meta.append("automated bug-hunting framework", style=C_MUTED)
-
-    body = Group(
-        Align.center(art),
-        Align.center(tagline),
-        Text(""),
-        Align.center(meta),
-        Align.center(chips),
-    )
     console.print(
         Panel(
-            body,
+            Group(wordmark, tagline, Text(""), chips),
             border_style=C_GREEN,
-            box=box.ROUNDED,
-            padding=(1, 4),
+            box=_BOX,
+            padding=(0, 3),
         )
     )
 
@@ -203,32 +209,45 @@ def render_banner() -> None:
 # Phase tracking
 # ---------------------------------------------------------------------------
 
-
 class PhaseTracker:
-    """Tracks the status, detail text and timing of every scan phase."""
+    """
+    Tracks state, detail text, and wall-clock timing for every scan phase.
+
+    Phase states: pending → running → done | error | skipped
+    """
 
     PHASES: List[Tuple[str, str]] = [
-        ("bootstrap", "Tool Bootstrap"),
-        ("discovery", "Subdomain Discovery"),
-        ("probing", "HTTP Probing & Ports"),
-        ("harvest", "URL Harvesting"),
-        ("scanning", "Vulnerability Scanning"),
-        ("secrets", "JS Secret Mining"),
-        ("cloud", "Cloud Bucket Recon"),
+        ("bootstrap",   "Tool Bootstrap"),
+        ("discovery",   "Subdomain Discovery"),
+        ("probing",     "HTTP Probing & Ports"),
+        ("harvest",     "URL Harvesting"),
+        ("scanning",    "Vulnerability Scanning"),
+        ("secrets",     "JS Secret Mining"),
+        ("cloud",       "Cloud Bucket Recon"),
         ("screenshots", "Visual Screenshots"),
-        ("waf", "WAF Detection & Evasion"),
-        ("deep-scans", "Deep Detection Scans"),
-        ("reporting", "Report Generation"),
+        ("waf",         "WAF Detection & Evasion"),
+        ("deep-scans",  "Deep Detection Scans"),
+        ("reporting",   "Report Generation"),
     ]
 
+    # (marker-char, colour) keyed by status
+    # Markers are chosen to be legible in every terminal font.
+    _MARKER: Dict[str, Tuple[str, str]] = {
+        "pending": ("·",  C_DIM),
+        "running": ("◆",  C_AMBER),  # overridden with spinner frame when live
+        "done":    ("✓",  C_GREEN),
+        "skipped": ("─",  C_DIM),
+        "error":   ("✗",  C_RED),
+    }
+
     def __init__(self) -> None:
-        self._states: Dict[str, Dict[str, object]] = {
+        self._states: Dict[str, Dict] = {
             name: {
-                "label": label,
-                "status": "pending",
-                "detail": "",
+                "label":   label,
+                "status":  "pending",
+                "detail":  "",
                 "started": None,
-                "ended": None,
+                "ended":   None,
             }
             for name, label in self.PHASES
         }
@@ -237,11 +256,11 @@ class PhaseTracker:
         st = self._states.get(phase)
         if st is None:
             return
-        now = time.monotonic()
+        now  = time.monotonic()
         prev = st["status"]
         if status == "running" and prev != "running":
             st["started"] = now
-            st["ended"] = None
+            st["ended"]   = None
         elif status in ("done", "error", "skipped"):
             if st["started"] is None and status != "skipped":
                 st["started"] = now
@@ -250,74 +269,82 @@ class PhaseTracker:
         if detail:
             st["detail"] = detail
 
-    def _elapsed(self, st: Dict[str, object]) -> str:
+    def _elapsed(self, st: Dict) -> str:
         start = st["started"]
         if start is None:
             return ""
         end = st["ended"] if st["ended"] is not None else time.monotonic()
-        secs = max(0, int(end - start))  # type: ignore[operator]
-        if secs >= 3600:
-            return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
-        if secs >= 60:
-            return f"{secs // 60}m{secs % 60:02d}s"
-        return f"{secs}s"
+        return _fmt_secs(max(0, int(end - start)))  # type: ignore[operator]
 
     def counts(self) -> Tuple[int, int, int]:
-        """Return (done, total_active, errors) for the summary line."""
-        done = sum(1 for s in self._states.values() if s["status"] == "done")
+        """(done, active_phases, errors) — used in the dashboard subtitle."""
+        done   = sum(1 for s in self._states.values() if s["status"] == "done")
         errors = sum(1 for s in self._states.values() if s["status"] == "error")
         active = sum(1 for s in self._states.values() if s["status"] != "skipped")
         return done, active, errors
 
-    # -- rendering ----------------------------------------------------------
+    # -- plain-text render (no Rich) ----------------------------------------
 
     def render_plain(self) -> str:
-        lines = ["Scan Phases:"]
+        lines = []
         for st in self._states.values():
+            marker, _ = self._MARKER.get(str(st["status"]), ("?", ""))
+            detail = f"  {st['detail']}" if st["detail"] else ""
+            dur    = f"  {self._elapsed(st)}" if self._elapsed(st) else ""
             lines.append(
-                f"  [{str(st['status']):8}] {st['label']} {st['detail']}".rstrip()
+                f"  {marker}  {str(st['label']):<28} {str(st['status']):<9}{detail}{dur}"
             )
         return "\n".join(lines)
 
+    # -- Rich table render (embedded inside the live panel) -----------------
+
     def render_table(self, spinner_frame: str = "") -> "Table":
-        status_style = {
+        """
+        Tight ops table — no outer border, just a flat list of phase rows.
+
+        Layout:
+          marker  Phase Name               result detail           time
+          ──────────────────────────────────────────────────────────────
+          ✓       Tool Bootstrap           12 tools verified       0:04
+          ⠸       Vulnerability Scanning   CVE-2024-xxxx           3:09
+          ·       JS Secret Mining
+        """
+        status_style: Dict[str, str] = {
             "pending": C_DIM,
             "running": f"bold {C_AMBER}",
-            "done": f"bold {C_GREEN}",
-            "skipped": f"dim italic {C_DIM}",
-            "error": f"bold {C_RED}",
+            "done":    f"{C_GREEN}",
+            "skipped": f"dim {C_DIM}",
+            "error":   f"bold {C_RED}",
         }
-        marker = {
-            "pending": "○",
-            "running": spinner_frame or "◇",
-            "done": "●",
-            "skipped": "⊘",
-            "error": "✗",
-        }
+
         table = Table(
-            show_header=True,
-            header_style=f"bold {C_CYAN}",
-            box=box.SIMPLE_HEAD,
-            border_style=C_LINE,
+            show_header=False,
+            box=None,           # no outer border — panel provides that
             padding=(0, 1),
             expand=True,
         )
-        table.add_column("", width=2, no_wrap=True)
-        table.add_column("Phase", style=C_TEXT, no_wrap=True, ratio=3)
-        table.add_column("Status", width=10, no_wrap=True)
-        table.add_column("Detail", style=C_DIM, overflow="ellipsis", ratio=4)
-        table.add_column("Time", justify="right", style=C_DIM, width=7, no_wrap=True)
+        table.add_column("m",      width=2,   no_wrap=True)
+        table.add_column("label",             no_wrap=True, ratio=3)
+        table.add_column("detail",            overflow="ellipsis", ratio=5)
+        table.add_column("time",   width=7,   no_wrap=True, justify="right")
 
         for st in self._states.values():
             status = str(st["status"])
-            style = status_style.get(status, "white")
+            style  = status_style.get(status, "white")
+            marker, mcol = self._MARKER.get(status, ("·", C_DIM))
+            if status == "running":
+                marker = spinner_frame or "◆"
+
+            # Dim everything that hasn't started yet so running/done stand out
+            label_style = style if status in ("running", "done", "error") else C_DIM
+
             table.add_row(
-                Text(marker.get(status, "·"), style=style),
-                str(st["label"]),
-                Text(status, style=style),
-                str(st["detail"])[:80],
-                self._elapsed(st),
+                Text(marker, style=mcol),
+                Text(str(st["label"]), style=label_style),
+                Text(str(st["detail"])[:72], style=C_DIM if status != "running" else C_MUTED),
+                Text(self._elapsed(st), style=C_DIM),
             )
+
         return table
 
 
@@ -325,81 +352,106 @@ class PhaseTracker:
 # Live dashboard renderable
 # ---------------------------------------------------------------------------
 
-
 if RICH_AVAILABLE:
 
     class _Dashboard:
-        """A self-refreshing renderable: pipeline table + active progress bars.
+        """
+        Self-refreshing renderable composed from:
+          · Panel title/subtitle  — session target, phase count, elapsed
+          · Phase ops-table       — all 11 phases with state + detail + time
+          · Separator + progress  — only rendered when a task is in flight
 
-        Because this object exposes ``__rich_console__``, the parent ``Live``
-        re-renders it on every refresh tick, which animates the spinner and
-        ticks the per-phase timers without any manual repainting.
+        Rich calls ``__rich_console__`` on every Live refresh tick (~10 Hz),
+        so spinner frames and elapsed times update without manual repainting.
         """
 
         def __init__(self, manager: "ProgressManager") -> None:
             self._m = manager
 
-        def __rich_console__(self, console, options):  # noqa: D401,ANN001
-            frame = _SPINNER_FRAMES[int(time.monotonic() * 12) % len(_SPINNER_FRAMES)]
-            done, active, errors = self._m.phases.counts()
+        def __rich_console__(self, console, options):  # noqa: ANN001
+            m     = self._m
+            frame = _SPINNER[int(time.monotonic() * 10) % len(_SPINNER)]
 
-            elapsed = ""
-            if self._m._session_start is not None:
-                secs = int(time.monotonic() - self._m._session_start)
-                elapsed = (
-                    f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
-                )
+            done, active, errors = m.phases.counts()
 
+            # ── subtitle (right side of panel border) ────────────────────
             subtitle = Text()
-            subtitle.append(f" {done}", style=f"bold {C_GREEN}")
-            subtitle.append("/", style=C_DIM)
-            subtitle.append(f"{active} phases", style=C_MUTED)
+            subtitle.append(f"{done}", style=f"bold {C_GREEN}")
+            subtitle.append(f"/{active} phases", style=C_MUTED)
             if errors:
-                subtitle.append(f"  ·  {errors} error(s)", style=f"bold {C_RED}")
-            if elapsed:
-                subtitle.append(f"  ·  {elapsed} elapsed ", style=C_MUTED)
+                subtitle.append(f"   {errors} err", style=f"bold {C_RED}")
+            if m._session_start is not None:
+                secs = int(time.monotonic() - m._session_start)
+                subtitle.append(f"   {_fmt_secs(secs)} ", style=C_DIM)
 
-            renderables: List[RenderableType] = [self._m.phases.render_table(frame)]
+            # ── panel title (left side) ───────────────────────────────────
+            if m._target:
+                title_text = (
+                    f"[bold {C_GREEN}]◆ BOUNTYMIND[/]"
+                    f"  [dim {C_DIM}]▸[/]"
+                    f"  [{C_TEXT}]{m._target}[/]"
+                )
+            else:
+                title_text = f"[bold {C_GREEN}]◆ BOUNTYMIND[/]"
 
-            # Only show progress bars for work that is still in flight so the
-            # pinned region stays compact during long scans.
-            live_tasks = [t for t in self._m._progress.tasks if not t.finished]
+            # ── hide completed tasks; collect in-flight ones ─────────────
+            # This is the critical fix: without hiding finished tasks,
+            # the Progress widget accumulates one bar per phase and grows
+            # taller than the terminal, causing Rich to re-emit the whole
+            # frame each tick — producing the duplicated scrolling bars.
+            live_tasks = []
+            for t in m._progress.tasks:  # type: ignore[union-attr]
+                if t.finished:
+                    if t.visible:
+                        m._progress.update(t.id, visible=False)  # type: ignore[union-attr]
+                elif t.visible:
+                    live_tasks.append(t)
+
+            # ── compose renderables ──────────────────────────────────────
+            parts: List[RenderableType] = [m.phases.render_table(frame)]
             if live_tasks:
-                renderables.append(Rule(style=C_LINE))
-                renderables.append(self._m._progress)
+                parts.append(Rule(style=C_LINE))
+                parts.append(m._progress)  # type: ignore[arg-type]
 
             yield Panel(
-                Group(*renderables),
-                title=f"[bold {C_GREEN}]BOUNTYMIND[/]  [dim {C_MUTED}]scan pipeline[/]",
+                Group(*parts),
+                title=title_text,
                 title_align="left",
                 subtitle=subtitle,
                 subtitle_align="right",
                 border_style=C_LINE,
-                box=box.ROUNDED,
+                box=_BOX,
                 padding=(0, 1),
             )
 
 
 # ---------------------------------------------------------------------------
-# ProgressManager
+# ProgressManager — the single object every module imports and calls
 # ---------------------------------------------------------------------------
 
-
 class ProgressManager:
-    """Owns the live scan dashboard and all console output helpers."""
+    """
+    Owns the live scan dashboard, phase tracker, and all console helpers.
+
+    All ``print_*`` methods emit timestamped lines *above* the live panel
+    so the operator log scrolls naturally while the dashboard stays pinned.
+    """
 
     def __init__(self) -> None:
-        self.phases = PhaseTracker()
-        self._live: Optional[object] = None
-        self._session_start: Optional[float] = None
-        self._progress: Optional[object] = None
+        self.phases          = PhaseTracker()
+        self._live:          Optional[object] = None
+        self._session_start: Optional[float]  = None
+        self._target:        str              = ""
+        self._progress:      Optional[object] = None
 
         if RICH_AVAILABLE:
             self._progress = Progress(
                 SpinnerColumn(spinner_name="dots", style=C_GREEN),
+                # Strip any Rich markup modules embed in descriptions
+                # (e.g. "[cyan]Discovery") so the bar shows plain text.
                 TextColumn(f"[{C_TEXT}]{{task.description}}"),
                 BarColumn(
-                    bar_width=30,
+                    bar_width=26,
                     complete_style=C_GREEN,
                     finished_style=C_GREEN,
                     pulse_style="#1c4228",
@@ -409,6 +461,9 @@ class ProgressManager:
                 TimeElapsedColumn(),
                 console=console,
                 transient=False,
+                # The session Live owns all repainting; disable the Progress
+                # widget's own refresh to prevent re-entrant render calls.
+                auto_refresh=False,
             )
 
     # ------------------------------------------------------------------
@@ -417,78 +472,90 @@ class ProgressManager:
 
     @contextmanager
     def session(self, title: str = "BountyMind") -> Generator[None, None, None]:
-        """Render the live scan dashboard for the duration of the scan."""
+        """
+        Context manager that starts the live dashboard for one scan.
+
+        Usage::
+
+            with pm.session("BountyMind — example.com"):
+                # run phases here
+        """
+        self._target        = title.replace("BountyMind — ", "").strip()
+        self._session_start = time.monotonic()
+
         if RICH_AVAILABLE and self._progress is not None:
-            self._session_start = time.monotonic()
-            header = Text()
-            header.append("◢◤ ", style=f"bold {C_GREEN}")
-            header.append("target  ", style=C_DIM)
-            header.append(title, style=f"bold {C_TEXT}")
-            console.print(
-                Panel(
-                    header,
-                    border_style=C_GREEN,
-                    box=box.HEAVY_EDGE,
-                    padding=(0, 2),
-                )
-            )
             self._live = Live(
                 _Dashboard(self),
                 console=console,
-                refresh_per_second=12,
+                refresh_per_second=10,
                 transient=False,
-                vertical_overflow="visible",
+                # Clip to viewport: a safety net for small terminals.
+                # The dashboard is bounded (fixed phase table + at most
+                # one task bar) so this never loses meaningful output.
+                vertical_overflow="crop",
             )
-            self._live.start()
+            self._live.start()  # type: ignore[union-attr]
             try:
                 yield
             finally:
-                # Final repaint so completed timings/states are accurate.
                 try:
-                    self._live.refresh()
+                    self._live.refresh()  # type: ignore[union-attr]
                 finally:
-                    self._live.stop()
+                    self._live.stop()  # type: ignore[union-attr]
                     self._live = None
 
-            secs = int(time.monotonic() - (self._session_start or time.monotonic()))
-            dur = f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+            # ── completion footer ─────────────────────────────────────
+            secs           = int(time.monotonic() - (self._session_start or 0))
+            dur            = _fmt_secs(secs)
             done, active, errors = self.phases.counts()
-            tail = Text()
-            tail.append("●  ", style=f"bold {C_GREEN}")
-            tail.append("scan complete", style=f"bold {C_TEXT}")
-            tail.append(f"   {done}/{active} phases", style=C_MUTED)
+            foot           = Text()
+            foot.append(" SCAN COMPLETE ", style=f"bold reverse {C_GREEN}")
+            foot.append(f"   {self._target}   ", style=f"bold {C_TEXT}")
+            foot.append(f"{done}/{active} phases", style=C_MUTED)
             if errors:
-                tail.append(f" · {errors} error(s)", style=f"bold {C_RED}")
-            tail.append(f" · {dur}", style=C_MUTED)
+                foot.append(f"   {errors} error(s)", style=f"bold {C_RED}")
+            foot.append(f"   {dur}", style=C_MUTED)
             console.print(
-                Panel(tail, border_style=C_LINE, box=box.ROUNDED, padding=(0, 2))
+                Panel(foot, border_style=C_GREEN, box=_BOX, padding=(0, 2))
             )
+
         else:
-            print(f"\n{'=' * 70}\n  {title}\n{'=' * 70}\n")
+            # ── plain-text fallback ───────────────────────────────────
+            sep    = "═" * 60
+            target = title.replace("BountyMind — ", "").strip()
+            start  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"\n  {sep}")
+            print(f"  TARGET  : {target}")
+            print(f"  STARTED : {start}")
+            print(f"  {sep}\n")
             yield
-            print(f"\n{'=' * 28}  scan complete  {'=' * 28}\n")
+            secs = int(time.monotonic() - (self._session_start or 0))
+            print(f"\n  {sep}")
+            print(f"  SCAN COMPLETE  ·  {_fmt_secs(secs)}")
+            print(f"  {sep}\n")
 
     # ------------------------------------------------------------------
     # Progress tasks
     # ------------------------------------------------------------------
 
     def add_task(self, description: str, total: int = 100, **fields) -> object:
-        """Add a progress task and return its id (or None in fallback mode)."""
+        """Add a progress task and return an opaque task id."""
         if RICH_AVAILABLE and self._progress is not None:
-            default_fields = {"status": ""}
-            default_fields.update(fields)
+            kw = {"status": ""}
+            kw.update(fields)
             return self._progress.add_task(  # type: ignore[union-attr]
-                description, total=total, **default_fields
+                description, total=total, **kw
             )
-        print(f"  → {description} …")
+        plain = _strip_markup(description)
+        print(f"  {_ts()} [*] {plain} …")
         return None
 
     def advance(self, task_id: object, amount: int = 1, status: str = "") -> None:
         if RICH_AVAILABLE and self._progress is not None and task_id is not None:
-            kwargs: Dict[str, object] = {"advance": amount}
+            kw: Dict[str, object] = {"advance": amount}
             if status:
-                kwargs["status"] = status
-            self._progress.update(task_id, **kwargs)  # type: ignore[union-attr]
+                kw["status"] = status
+            self._progress.update(task_id, **kw)  # type: ignore[union-attr]
 
     def update_status(self, task_id: object, status: str) -> None:
         if RICH_AVAILABLE and self._progress is not None and task_id is not None:
@@ -496,146 +563,191 @@ class ProgressManager:
 
     def complete_task(self, task_id: object, status: str = "Done") -> None:
         if RICH_AVAILABLE and self._progress is not None and task_id is not None:
-            # Mark fully complete; the dashboard hides finished tasks to stay tidy.
-            self._progress.update(  # type: ignore[union-attr]
-                task_id, status=status, completed=True
+            # Snap bar to 100 % then immediately hide it so the dashboard
+            # stays compact — only in-flight tasks should be visible.
+            task = next(
+                (t for t in self._progress.tasks  # type: ignore[union-attr]
+                 if t.id == task_id), None
             )
+            if task is not None and task.total is not None:
+                self._progress.update(task_id, completed=task.total)  # type: ignore[union-attr]
+            self._progress.update(task_id, status=status, visible=False)  # type: ignore[union-attr]
 
     # ------------------------------------------------------------------
-    # Dashboard / phase state
+    # Phase state / dashboard
     # ------------------------------------------------------------------
 
     def set_phase_status(self, phase: str, status: str, detail: str = "") -> None:
-        """Update a phase's state; the live dashboard reflects it automatically."""
+        """Update a phase; the live dashboard reflects it automatically."""
         self.phases.set(phase, status, detail)
         self.refresh_dashboard()
 
     def refresh_dashboard(self) -> None:
-        """Repaint the live dashboard if active; quiet no-op otherwise."""
+        """Repaint the live panel; quiet no-op when no session is active."""
         if RICH_AVAILABLE and self._live is not None:
             try:
                 self._live.refresh()  # type: ignore[union-attr]
-            except Exception:  # pragma: no cover - defensive
+            except Exception:  # pragma: no cover
                 pass
-        elif not RICH_AVAILABLE:
-            # Without Rich there is no pinned surface; stay quiet to avoid spam.
-            return
 
     # ------------------------------------------------------------------
-    # Console output helpers (print above the live dashboard)
+    # Console output helpers
+    # All print_* methods include a wall-clock timestamp and a
+    # Metasploit-style prefix so the operator log is always readable.
+    # Lines are emitted *above* the live panel — they scroll, the panel
+    # stays pinned.
     # ------------------------------------------------------------------
 
     @staticmethod
     def print_info(msg: str) -> None:
+        ts = _ts()
         if RICH_AVAILABLE:
-            console.print(Text.assemble(("  › ", C_CYAN), (msg, C_TEXT)))
+            line = Text()
+            line.append(f"  {ts} ", style=f"dim {C_DIM}")
+            line.append("[*]", style=f"bold {C_CYAN}")
+            line.append(f" {msg}", style=C_TEXT)
+            console.print(line)
         else:
-            print(f"  INFO: {msg}")
+            print(f"  {ts} [*] {msg}")
 
     @staticmethod
     def print_success(msg: str) -> None:
+        ts = _ts()
         if RICH_AVAILABLE:
-            console.print(Text.assemble(("  ✔ ", C_GREEN), (msg, C_TEXT)))
+            line = Text()
+            line.append(f"  {ts} ", style=f"dim {C_DIM}")
+            line.append("[+]", style=f"bold {C_GREEN}")
+            line.append(f" {msg}", style=C_TEXT)
+            console.print(line)
         else:
-            print(f"  OK: {msg}")
+            print(f"  {ts} [+] {msg}")
 
     @staticmethod
     def print_warning(msg: str) -> None:
+        ts = _ts()
         if RICH_AVAILABLE:
-            console.print(Text.assemble(("  ▲ ", C_AMBER), (msg, C_TEXT)))
+            line = Text()
+            line.append(f"  {ts} ", style=f"dim {C_DIM}")
+            line.append("[!]", style=f"bold {C_AMBER}")
+            line.append(f" {msg}", style=C_TEXT)
+            console.print(line)
         else:
-            print(f"  WARN: {msg}")
+            print(f"  {ts} [!] {msg}")
 
     @staticmethod
     def print_error(msg: str) -> None:
+        ts = _ts()
         if RICH_AVAILABLE:
-            console.print(Text.assemble(("  ✖ ", C_RED), (msg, f"bold {C_TEXT}")))
+            line = Text()
+            line.append(f"  {ts} ", style=f"dim {C_DIM}")
+            line.append("[-]", style=f"bold {C_RED}")
+            line.append(f" {msg}", style=f"bold {C_TEXT}")
+            console.print(line)
         else:
-            print(f"  ERROR: {msg}")
+            print(f"  {ts} [-] {msg}")
 
     @staticmethod
     def print_phase(phase: str) -> None:
+        """Section divider — emitted before each major phase begins."""
         if RICH_AVAILABLE:
             console.print(
                 Rule(
-                    Text(f" {phase} ", style=f"bold {C_GREEN}"),
+                    Text(f" {phase.upper()} ", style=f"bold {C_GREEN}"),
                     style=C_LINE,
                     align="left",
                 )
             )
         else:
-            print(f"\n--- Phase: {phase} ---\n")
+            sep = "─" * 60
+            print(f"\n  {sep}\n  {phase.upper()}\n  {sep}\n")
 
     def print_usage(self) -> None:
-        """Show a compact CLI quick-reference card."""
+        """Quick-reference card printed immediately after the banner."""
         if not RICH_AVAILABLE:
             print(
-                "BountyMind: bountymind -d DOMAIN | -l FILE | "
+                "  Usage: bountymind -d DOMAIN | -l FILE | "
                 "--bootstrap | --check-env | --help"
             )
             return
 
-        usage = Table(
-            show_header=False, box=box.SIMPLE, border_style=C_LINE, padding=(0, 2)
-        )
-        usage.add_column("cmd", style=f"bold {C_GREEN}", no_wrap=True)
-        usage.add_column("desc", style=C_MUTED)
-        for cmd, desc in [
-            ("bountymind -d example.com", "scan a single domain"),
-            ("bountymind -l targets.txt", "scan targets from a file"),
-            ("bountymind --bootstrap", "install / update all tools"),
-            ("bountymind --update", "self-update from GitHub"),
-            ("bountymind --check-env", "verify the environment"),
-            ("bountymind --help", "full option reference"),
-        ]:
-            usage.add_row(cmd, desc)
+        cmds = [
+            ("bountymind -d example.com",   "scan a single domain"),
+            ("bountymind -l targets.txt",   "scan targets from a file"),
+            ("bountymind --bootstrap",      "install / update all tools"),
+            ("bountymind --update",         "self-update from GitHub"),
+            ("bountymind --check-env",      "verify tool environment"),
+            ("bountymind --help",           "full option reference"),
+        ]
+
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_column("cmd",  style=f"bold {C_GREEN}", no_wrap=True)
+        table.add_column("sep",  style=C_DIM, width=1, no_wrap=True)
+        table.add_column("desc", style=C_MUTED)
+        for cmd, desc in cmds:
+            table.add_row(cmd, "─", desc)
+
         console.print(
             Panel(
-                usage,
+                table,
                 title=f"[bold {C_TEXT}]quick reference[/]",
                 title_align="left",
-                subtitle=f"[dim {C_DIM}]reports → output/reports/  ·  logs → logs/framework.log[/]",
+                subtitle=(
+                    f"[dim {C_DIM}]reports → output/reports/"
+                    f"   logs → logs/framework.log[/]"
+                ),
                 subtitle_align="right",
                 border_style=C_LINE,
-                box=box.ROUNDED,
-                padding=(0, 1),
+                box=_BOX,
+                padding=(0, 2),
             )
         )
 
     @staticmethod
     def print_finding(severity: str, target: str, msg: str) -> None:
-        """Print a single finding with severity-based colouring."""
+        """
+        Emit a single finding.
+
+        Rich output:
+          [15:27:09] [CRITICAL]  admin.example.com  SQL Injection — /api/users
+          [15:27:11] [HIGH    ]  api.example.com    Hardcoded JWT secret in app.js
+        """
         sev = severity.lower()
-        colors = {
+        color_map: Dict[str, str] = {
             "critical": C_RED,
-            "high": C_ORANGE,
-            "medium": C_AMBER,
-            "low": C_CYAN,
-            "info": C_MUTED,
+            "high":     C_ORANGE,
+            "medium":   C_AMBER,
+            "low":      C_CYAN,
+            "info":     C_MUTED,
         }
-        color = colors.get(sev, C_TEXT)
+        color = color_map.get(sev, C_TEXT)
+        ts    = _ts()
+        badge = f"[{severity.upper():<8}]"
+
         if RICH_AVAILABLE:
             line = Text()
-            line.append("  ", style="")
-            line.append(f" {severity.upper():8} ", style=f"bold {color} reverse")
-            line.append("  ", style="")
-            line.append(target, style=C_TEXT)
-            line.append("  ", style="")
-            line.append(msg, style=f"dim {C_MUTED}")
+            line.append(f"  {ts} ", style=f"dim {C_DIM}")
+            line.append(badge,   style=f"bold {color}")
+            line.append("  ",    style="")
+            line.append(f"{target}", style=f"bold {C_TEXT}")
+            line.append("  ",    style="")
+            line.append(msg,     style=C_MUTED)
             console.print(line)
         else:
-            print(f"  [{severity.upper():8}] {target}: {msg}")
+            print(f"  {ts}  {badge}  {target}  {msg}")
 
     @staticmethod
     def print_summary_table(rows: list, headers: list, title: str = "") -> None:
-        """Render a summary table."""
+        """
+        Render an aligned tabular summary (tool status, scan totals, etc.).
+        """
         if not RICH_AVAILABLE:
             if title:
-                print(f"\n{title}")
-            col_width = max((len(h) for h in headers), default=4) + 2
-            print("  " + "  ".join(h.ljust(col_width) for h in headers))
+                print(f"\n  {title}")
+                print(f"  {'─' * max(40, len(title) + 4)}")
+            w = max((len(h) for h in headers), default=4) + 2
+            print("  " + "  ".join(h.ljust(w) for h in headers))
             for row in rows:
-                print("  " + "  ".join(str(c).ljust(col_width) for c in row))
+                print("  " + "  ".join(str(c).ljust(w) for c in row))
             return
 
         table = Table(
@@ -643,9 +755,9 @@ class ProgressManager:
             title_justify="left",
             show_header=True,
             header_style=f"bold {C_CYAN}",
-            box=box.SIMPLE_HEAD,
+            box=_BOX_TABLE,
             border_style=C_LINE,
-            padding=(0, 1),
+            padding=(0, 2),
         )
         for h in headers:
             table.add_column(str(h))
