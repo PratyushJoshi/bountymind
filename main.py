@@ -157,6 +157,19 @@ Safety note:
         help="Verify tool availability (exit 1 if required tools are missing)",
     )
     parser.add_argument(
+        "--list-runs",
+        action="store_true",
+        default=False,
+        help="List all previous scan runs (across websites) and exit",
+    )
+    parser.add_argument(
+        "--prune-runs",
+        metavar="KEEP",
+        type=int,
+        default=None,
+        help="Delete old run directories, keeping the KEEP most recent, then exit",
+    )
+    parser.add_argument(
         "--skip-discovery",
         action="store_true",
         default=False,
@@ -249,6 +262,75 @@ def validate_targets(raw_targets: List[str]) -> List[str]:
     return deduped
 
 
+def _build_command_string(args: argparse.Namespace) -> str:
+    """Reconstruct a readable invocation string for the run manifest."""
+    parts = ["bountymind"]
+    if args.domain:
+        parts += ["-d", args.domain]
+    if args.target_list:
+        parts += ["-l", args.target_list]
+    for flag in ("skip_discovery", "skip_scanning", "skip_dirs", "skip_harvest",
+                 "skip_secrets", "skip_cloud", "skip_screenshots", "skip_waf"):
+        if getattr(args, flag, False):
+            parts.append("--" + flag.replace("_", "-"))
+    if args.format:
+        parts += ["--format", args.format]
+    if args.concurrency:
+        parts += ["--concurrency", str(args.concurrency)]
+    return " ".join(parts)
+
+
+def handle_list_runs(output_root: Path, progress: ProgressManager) -> int:
+    """Print a table of all discovered runs across websites."""
+    from utils.manifest import find_runs, runs_table_rows, RUNS_TABLE_HEADERS
+
+    runs = find_runs(output_root)
+    if not runs:
+        progress.print_info(f"No runs found under {output_root}")
+        return 0
+    progress.print_summary_table(
+        rows=runs_table_rows(runs),
+        headers=RUNS_TABLE_HEADERS,
+        title=f"BountyMind Runs ({len(runs)})",
+    )
+    active = sum(1 for r in runs if r.status == "running")
+    if active:
+        progress.print_info(f"{active} run(s) currently in progress.")
+    return 0
+
+
+def handle_prune_runs(output_root: Path, keep: int, progress: ProgressManager) -> int:
+    """Delete old completed run directories, keeping the most recent ``keep``."""
+    import shutil
+    from utils.manifest import find_runs
+
+    if keep < 0:
+        progress.print_error("--prune-runs KEEP must be >= 0")
+        return 1
+
+    runs = find_runs(output_root)
+    # Never prune runs that are still in progress.
+    finished = [r for r in runs if r.status != "running"]
+    to_delete = finished[keep:]
+    if not to_delete:
+        progress.print_info(
+            f"Nothing to prune (kept {min(keep, len(finished))} of {len(finished)} finished runs)."
+        )
+        return 0
+
+    deleted = 0
+    for r in to_delete:
+        run_dir = r.path.parent
+        try:
+            shutil.rmtree(run_dir)
+            deleted += 1
+            log.info("Pruned run directory: %s", run_dir)
+        except OSError as exc:
+            progress.print_warning(f"Could not delete {run_dir}: {exc}")
+    progress.print_success(f"Pruned {deleted} old run(s); kept {keep} most recent.")
+    return 0
+
+
 def _derive_output_label(targets: List[str]) -> str:
     """
     Build a filesystem-friendly label used to group output by website.
@@ -319,11 +401,17 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
 
     session_id = uuid.uuid4().hex[:12]
 
+    run_label = _derive_output_label(targets) if has_targets else ""
     if has_targets:
         # output/<website>/<timestamp>_<session_id>/{raw,parsed,reports,screenshots}
         output = OutputManager(
-            output_root, session_id=session_id, label=_derive_output_label(targets)
+            output_root, session_id=session_id, label=run_label
         )
+        # Give this run its own log file so concurrent sessions (other windows /
+        # Kali workspaces) never interleave their traces with each other.
+        from utils.logger import add_session_log_file
+        add_session_log_file(str(output.base / "framework.log"), log_level=cfg.log_level)
+        log.info("Session log file: %s", output.base / "framework.log")
     else:
         # Maintenance-only invocations (--bootstrap/--update/--check-env) do not
         # need a per-website folder; keep their scratch output out of the way.
@@ -406,6 +494,18 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
     progress.print_info(f"Output directory: {output.base}")
     log.info("Session ID: %s | Targets: %s | Output: %s", session_id, targets, output.base)
 
+    # Machine-readable run manifest (status=running now, finalized at the end).
+    from utils.manifest import RunManifest
+    manifest = RunManifest(
+        run_dir=output.base,
+        session_id=session_id,
+        targets=targets,
+        label=run_label,
+        command=_build_command_string(args),
+    )
+    manifest.start()
+
+    report_paths: List[Path] = []
     with progress.session(f"BountyMind — {', '.join(targets)}"):
         # Phase 1 — Discovery
         from modules.discovery import DiscoveryModule
@@ -665,6 +765,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             session.errors.append(msg)
             progress.set_phase_status("reporting", "error")
             progress.print_error(msg)
+            manifest.finish(session, report_paths, status="failed")
             return 1
 
     # Final summary
@@ -690,7 +791,11 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         headers=["Metric", "Count"],
         title="Scan Summary",
     )
+
+    final_status = "completed_with_errors" if session.errors else "completed"
+    manifest.finish(session, report_paths, status=final_status)
     progress.print_success(f"All artifacts saved under: {output.base}")
+    progress.print_info(f"Run manifest: {manifest.path}")
 
     log.info(
         "Scan complete | session=%s | duration=%s | findings=%d | errors=%d",
@@ -727,6 +832,13 @@ def main() -> int:
     log.info("BountyMind starting — session init")
     platform = PlatformInfo()
     progress.print_info(f"Platform: {platform.distro_name} {platform.distro_version}")
+
+    # Run-management commands that don't need a scan target.
+    output_root = Path(args.output_dir) if args.output_dir else cfg.output_dir
+    if args.list_runs:
+        return handle_list_runs(output_root, progress)
+    if args.prune_runs is not None:
+        return handle_prune_runs(output_root, args.prune_runs, progress)
 
     return run_scan(args, cfg, progress)
 

@@ -100,6 +100,23 @@ bountymind --help
 | `--check-env` | Verify tool availability (exit 1 if **required** tools are missing) |
 | `--no-auto-bootstrap` | Do not auto-install missing tools on first scan |
 
+### Run Management
+
+| Flag | Description |
+|------|-------------|
+| `--list-runs` | List every previous scan run (across all websites) with status, timing, and finding counts, then exit |
+| `--prune-runs KEEP` | Delete old run directories, keeping the `KEEP` most recent (never deletes runs still in progress), then exit |
+
+Every scan writes a machine-readable `run.json` manifest into its own run
+directory (see [Output Structure](#output-structure)). `--list-runs` reads
+those manifests, so you can observe **all parallel sessions** — including which
+ones are currently `running` (with their PID and host) — from any window:
+
+```bash
+bountymind --list-runs
+bountymind --prune-runs 10      # keep the 10 newest runs, delete the rest
+```
+
 ### Phase Skips
 
 | Flag | Skips |
@@ -136,7 +153,7 @@ bountymind --help
 **WAF detection & evasion:**
 - `wafw00f` detection on all live URLs, then evasion probes (nuclei with bypass headers, `ffuf` with evasion headers, `arjun`) on protected endpoints
 
-**Live progress:** a simultaneous phase dashboard shows each module's status while the scan runs.
+**Live progress:** a simultaneous phase dashboard shows each module's status while the scan runs. Its header persistently displays the target website(s), the short session id, and the output directory, so multiple BountyMind windows running concurrently are easy to tell apart.
 
 ---
 
@@ -160,12 +177,14 @@ never overwrite one another:
 output/
 └── <website>/                         # one folder per target website
     └── <timestamp>_<session_id>/      # one folder per scan run (parallel-safe)
+        ├── run.json       # Machine-readable manifest (status, stats, reports, PID/host)
+        ├── framework.log  # Per-run log (this session only)
         ├── raw/           # Raw tool output
         ├── parsed/        # Normalized artifacts (dast_urls_*.txt, waf_urls_*.txt, …)
         ├── reports/       # Markdown + HTML reports for THIS run
         └── screenshots/   # gowitness captures
 logs/
-└── framework.log          # Full execution trace
+└── framework.log          # Aggregate execution trace (all sessions)
 ```
 
 Because every run lives under a unique `<timestamp>_<session_id>` folder, two
@@ -173,8 +192,38 @@ workspaces can scan the **same** website at the same time without colliding.
 The output directory for the current run is printed at start (`Output directory:`)
 and again at the end (`All artifacts saved under:`).
 
-> Maintenance-only commands (`--bootstrap`, `--update`, `--check-env`) write any
-> scratch output under `output/_maintenance/` instead of a website folder.
+### `run.json` manifest
+
+Each run records a stable JSON contract for automation/CI and cross-session
+observability:
+
+```json
+{
+  "schema_version": 1,
+  "tool": "bountymind",
+  "session_id": "3f9a1c2b7d4e",
+  "label": "example.com",
+  "targets": ["example.com"],
+  "status": "completed",          // running | completed | completed_with_errors | failed
+  "pid": 12345,
+  "hostname": "kali",
+  "started_at": "2026-06-26T07:27:10+00:00",
+  "ended_at": "2026-06-26T07:41:55+00:00",
+  "duration_seconds": 885.0,
+  "output_dir": "output/example.com/20260626_072710_3f9a1c2b7d4e",
+  "command": "bountymind -d example.com",
+  "stats": { "subdomains": 42, "live_hosts": 18, "nuclei_findings": 7, "...": 0 },
+  "reports": ["output/.../reports/report_3f9a1c2b7d4e_20260626_074155.md"]
+}
+```
+
+Use `bountymind --list-runs` to view all manifests at a glance, including which
+sessions are still `running`. Discovery is **lock-free** (each session only
+writes its own manifest), so listing never interferes with active scans.
+
+> Maintenance-only commands (`--bootstrap`, `--update`, `--check-env`,
+> `--list-runs`, `--prune-runs`) do not create a website folder. Bootstrap/update
+> scratch output goes under `output/_maintenance/`.
 
 ---
 

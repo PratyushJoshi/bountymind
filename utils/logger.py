@@ -81,6 +81,34 @@ def setup_logging(
     _LOGGING_CONFIGURED = True
 
 
+def add_session_log_file(log_file: str, log_level: str = "DEBUG") -> Optional[logging.Handler]:
+    """
+    Attach an additional per-session log file handler to the framework logger.
+
+    Each BountyMind run (e.g. one per terminal window / Kali workspace) calls
+    this once it knows its isolated output directory, so every session writes a
+    clean, self-contained trace to ``<run-dir>/framework.log`` in addition to
+    the shared global log. Because each session is a separate OS process with
+    its own handler writing to its own file, concurrent sessions never mix
+    their logs together.
+
+    Returns the handler so the caller could detach it later if desired.
+    """
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | %(name)-40s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler = logging.FileHandler(log_file, encoding="utf-8", mode="a")
+    handler.setLevel(_parse_level(log_level))
+    handler.setFormatter(formatter)
+
+    logging.getLogger(FRAMEWORK_LOGGER).addHandler(handler)
+    return handler
+
+
 def get_logger(name: str) -> logging.Logger:
     """
     Return a child logger under the framework root.

@@ -146,6 +146,20 @@ def _strip_markup(s: str) -> str:
     return re.sub(r"\[/?[^\]]*\]", "", s)
 
 
+def _format_targets_label(targets: List[str]) -> str:
+    """
+    Concise human label for the website(s) of the current session.
+
+    Single target  -> ``Target: example.com``
+    Many targets   -> ``Targets: example.com (+2 more)``
+    """
+    if not targets:
+        return ""
+    if len(targets) == 1:
+        return f"Target: {targets[0]}"
+    return f"Targets: {targets[0]} (+{len(targets) - 1} more)"
+
+
 # ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
@@ -385,12 +399,16 @@ if RICH_AVAILABLE:
                 subtitle.append(f"   {_fmt_secs(secs)} ", style=C_DIM)
 
             # ── panel title (left side) ───────────────────────────────────
+            # Persistently identify which website this session is scanning so
+            # several concurrent windows / Kali workspaces are never confused.
             if m._target:
                 title_text = (
                     f"[bold {C_GREEN}]◆ BOUNTYMIND[/]"
                     f"  [dim {C_DIM}]▸[/]"
                     f"  [{C_TEXT}]{m._target}[/]"
                 )
+                if m._session_id:
+                    title_text += f"  [dim {C_DIM}]· sess {m._session_id}[/]"
             else:
                 title_text = f"[bold {C_GREEN}]◆ BOUNTYMIND[/]"
 
@@ -408,7 +426,15 @@ if RICH_AVAILABLE:
                     live_tasks.append(t)
 
             # ── compose renderables ──────────────────────────────────────
-            parts: List[RenderableType] = [m.phases.render_table(frame)]
+            parts: List[RenderableType] = []
+            if m._output_dir:
+                header = Text()
+                header.append("output ", style=f"dim {C_DIM}")
+                header.append("▸ ", style=C_DIM)
+                header.append(m._output_dir, style=C_MUTED)
+                parts.append(header)
+                parts.append(Rule(style=C_LINE))
+            parts.append(m.phases.render_table(frame))
             if live_tasks:
                 parts.append(Rule(style=C_LINE))
                 parts.append(m._progress)  # type: ignore[arg-type]
@@ -442,6 +468,8 @@ class ProgressManager:
         self._live:          Optional[object] = None
         self._session_start: Optional[float]  = None
         self._target:        str              = ""
+        self._session_id:    str              = ""
+        self._output_dir:    str              = ""
         self._progress:      Optional[object] = None
 
         if RICH_AVAILABLE:
@@ -467,6 +495,28 @@ class ProgressManager:
             )
 
     # ------------------------------------------------------------------
+    # Session context
+    # ------------------------------------------------------------------
+
+    def set_session_context(
+        self,
+        targets: List[str],
+        session_id: str = "",
+        output_dir: str = "",
+    ) -> None:
+        """
+        Record which website(s) / run this session pertains to.
+
+        Threaded in from ``main.run_scan`` so the live dashboard banner shows
+        the target, short session id, and output directory persistently —
+        letting a user tell concurrent BountyMind windows apart at a glance.
+        """
+        self._target     = _format_targets_label(targets)
+        self._session_id = session_id
+        self._output_dir = output_dir
+        self.refresh_dashboard()
+
+    # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
 
@@ -480,7 +530,10 @@ class ProgressManager:
             with pm.session("BountyMind — example.com"):
                 # run phases here
         """
-        self._target        = title.replace("BountyMind — ", "").strip()
+        # Preserve any concise label already set via set_session_context();
+        # only fall back to the raw title when no context was provided.
+        if not self._target:
+            self._target = title.replace("BountyMind — ", "").strip()
         self._session_start = time.monotonic()
 
         if RICH_AVAILABLE and self._progress is not None:
@@ -522,10 +575,14 @@ class ProgressManager:
         else:
             # ── plain-text fallback ───────────────────────────────────
             sep    = "═" * 60
-            target = title.replace("BountyMind — ", "").strip()
+            target = self._target or title.replace("BountyMind — ", "").strip()
             start  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             print(f"\n  {sep}")
             print(f"  TARGET  : {target}")
+            if self._session_id:
+                print(f"  SESSION : {self._session_id}")
+            if self._output_dir:
+                print(f"  OUTPUT  : {self._output_dir}")
             print(f"  STARTED : {start}")
             print(f"  {sep}\n")
             yield
