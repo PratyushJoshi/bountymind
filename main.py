@@ -249,6 +249,21 @@ def validate_targets(raw_targets: List[str]) -> List[str]:
     return deduped
 
 
+def _derive_output_label(targets: List[str]) -> str:
+    """
+    Build a filesystem-friendly label used to group output by website.
+
+    Single-target scans use the bare domain (e.g. ``output/example.com/``).
+    Multi-target list scans are grouped under the first target plus a count
+    so concurrent batch runs remain distinguishable.
+    """
+    if not targets:
+        return "scan"
+    if len(targets) == 1:
+        return targets[0]
+    return f"{targets[0]}_plus_{len(targets) - 1}_more"
+
+
 def print_banner(progress: ProgressManager) -> None:
     try:
         from utils.progress import render_banner
@@ -274,22 +289,52 @@ def _resolve_config_path(cli_config: str | None) -> Path:
 
 def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressManager) -> int:
     """Execute the full scan workflow."""
-    output_dir = Path(args.output_dir) if args.output_dir else cfg.output_dir
+    output_root = Path(args.output_dir) if args.output_dir else cfg.output_dir
     if args.format:
         formats = [f.strip().lower() for f in args.format.split(",")]
         cfg._data.setdefault("general", {})["report_formats"] = formats
     if args.concurrency:
         cfg._data.setdefault("general", {})["max_concurrency"] = args.concurrency
 
-    output = OutputManager(output_dir)
     platform = PlatformInfo()
+
+    # ------------------------------------------------------------------
+    # Resolve targets up front so each scan gets its OWN per-website output
+    # directory. This keeps simultaneous sessions (e.g. several Kali
+    # workspaces/desktops each scanning a different site) fully isolated —
+    # no two runs ever write to the same files.
+    # ------------------------------------------------------------------
+    raw_targets: List[str] = []
+    target_file_error: str | None = None
+    if args.domain:
+        raw_targets = [args.domain]
+    elif args.target_list:
+        try:
+            raw_targets = load_targets_from_file(args.target_list)
+        except FileNotFoundError as exc:
+            target_file_error = str(exc)
+
+    targets = validate_targets(raw_targets) if raw_targets else []
+    has_targets = bool(targets)
+
+    session_id = uuid.uuid4().hex[:12]
+
+    if has_targets:
+        # output/<website>/<timestamp>_<session_id>/{raw,parsed,reports,screenshots}
+        output = OutputManager(
+            output_root, session_id=session_id, label=_derive_output_label(targets)
+        )
+    else:
+        # Maintenance-only invocations (--bootstrap/--update/--check-env) do not
+        # need a per-website folder; keep their scratch output out of the way.
+        output = OutputManager(output_root / "_maintenance")
+
     runner = CommandRunner(raw_output_dir=output.raw)
 
     from modules.updater import ToolUpdater
     updater = ToolUpdater(cfg, runner, progress, platform)
 
     # Auto-bootstrap missing tools before scan (Linux only)
-    has_targets = bool(args.domain or args.target_list)
     if (
         has_targets
         and not args.no_auto_bootstrap
@@ -311,20 +356,20 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
 
     if args.update:
         result = updater.self_update(dry_run=args.dry_run)
-        if not args.domain and not args.target_list:
+        if not has_targets:
             return result
         if result != 0:
             return result
 
     if args.bootstrap:
         updater.bootstrap_all_tools(dry_run=args.dry_run)
-        if not args.domain and not args.target_list:
+        if not has_targets:
             progress.print_success("Bootstrap complete. No targets specified; exiting.")
             return 0
 
     if args.update_tools:
         updater.update_tools(dry_run=args.dry_run)
-        if not args.domain and not args.target_list:
+        if not has_targets:
             progress.print_success("Update complete. No targets specified; exiting.")
             return 0
 
@@ -333,33 +378,23 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         ok = updater.verify_environment()
         return 0 if ok else 1
 
-    # Target validation
-    raw_targets: List[str] = []
-    if args.domain:
-        raw_targets = [args.domain]
-    elif args.target_list:
-        try:
-            raw_targets = load_targets_from_file(args.target_list)
-        except FileNotFoundError as exc:
-            progress.print_error(str(exc))
-            return 1
-    else:
-        progress.print_error(
-            "No target specified. Use -d DOMAIN or -l FILE. See --help for usage."
-        )
-        progress.print_usage()
-        return 1
-
-    targets = validate_targets(raw_targets)
-    if not targets:
-        progress.print_error("No valid targets after validation. Check input and try again.")
+    # No valid targets and no management command handled above → usage error.
+    if not has_targets:
+        if target_file_error:
+            progress.print_error(target_file_error)
+        elif raw_targets:
+            progress.print_error("No valid targets after validation. Check input and try again.")
+        else:
+            progress.print_error(
+                "No target specified. Use -d DOMAIN or -l FILE. See --help for usage."
+            )
+            progress.print_usage()
         return 1
 
     progress.print_success(f"Targets validated: {', '.join(targets)}")
     progress.refresh_dashboard()
     log.info("Validated targets: %s", targets)
 
-    session_id = uuid.uuid4().hex[:12]
     session = ScanSession(
         session_id=session_id,
         targets=targets,
@@ -368,7 +403,8 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
     if args.auth:
         session.auth_token = args.auth
     progress.print_info(f"Session ID: {session_id}")
-    log.info("Session ID: %s | Targets: %s", session_id, targets)
+    progress.print_info(f"Output directory: {output.base}")
+    log.info("Session ID: %s | Targets: %s | Output: %s", session_id, targets, output.base)
 
     with progress.session(f"BountyMind — {', '.join(targets)}"):
         # Phase 1 — Discovery
@@ -654,6 +690,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         headers=["Metric", "Count"],
         title="Scan Summary",
     )
+    progress.print_success(f"All artifacts saved under: {output.base}")
 
     log.info(
         "Scan complete | session=%s | duration=%s | findings=%d | errors=%d",

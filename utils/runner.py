@@ -50,8 +50,24 @@ class CommandRunner:
     """
 
     def __init__(self, raw_output_dir: Optional[Path] = None) -> None:
-        self._raw_dir = raw_output_dir or Path("output/raw")
+        self._raw_dir = Path(raw_output_dir) if raw_output_dir else Path("output/raw")
         self._raw_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def raw_dir(self) -> Path:
+        """Directory where raw tool output is stored for this run."""
+        return self._raw_dir
+
+    @property
+    def base_dir(self) -> Path:
+        """
+        The per-run output base directory (parent of ``raw/``).
+
+        With per-website/session isolation this resolves to
+        ``output/<website>/<timestamp>_<session_id>/`` so artifacts written by
+        scanners never collide with parallel sessions on other workspaces.
+        """
+        return self._raw_dir.parent
 
     def _ensure_pipx_path(self) -> None:
         """Add pipx's binary directory to PATH if missing."""

@@ -17,22 +17,53 @@ class OutputManager:
     """
     Manages the output directory structure and provides path helpers.
 
-    Layout::
+    To keep simultaneous scans isolated (e.g. several Kali workspaces or
+    desktops each running BountyMind against a different website at the same
+    time), every scan gets its own directory grouped by website::
+
         output/
-          raw/          <- raw tool output files (per-tool subdirectories)
-          parsed/       <- normalized JSON/text artefacts
-          reports/      <- final Markdown and HTML reports
+          <website>/                         <- one folder per target website
+            <timestamp>_<session_id>/        <- one folder per scan run
+              raw/          <- raw tool output files (per-tool subdirectories)
+              parsed/       <- normalized JSON/text artefacts
+              reports/      <- final Markdown and HTML reports
+              screenshots/  <- gowitness captures
+
+    Because each run lives under a unique ``<timestamp>_<session_id>`` folder,
+    parallel sessions never overwrite one another's files — even when two
+    workspaces scan the *same* website concurrently.
+
+    When ``label`` is omitted (e.g. maintenance commands like ``--bootstrap``)
+    the manager falls back to the flat legacy layout directly under ``base_dir``.
     """
 
-    def __init__(self, base_dir: Path) -> None:
-        self.base = base_dir
-        self.raw = base_dir / "raw"
-        self.parsed = base_dir / "parsed"
-        self.reports = base_dir / "reports"
+    def __init__(
+        self,
+        base_dir: Path,
+        session_id: Optional[str] = None,
+        label: Optional[str] = None,
+    ) -> None:
+        self.root = Path(base_dir)
+        self.session_id = session_id
+
+        if label:
+            safe_label = self._sanitize(label)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            run_name = f"{ts}_{session_id}" if session_id else ts
+            self.website_dir = self.root / safe_label
+            self.base = self.website_dir / run_name
+        else:
+            self.website_dir = self.root
+            self.base = self.root
+
+        self.raw = self.base / "raw"
+        self.parsed = self.base / "parsed"
+        self.reports = self.base / "reports"
+        self.screenshots = self.base / "screenshots"
         self._init_dirs()
 
     def _init_dirs(self) -> None:
-        for d in (self.base, self.raw, self.parsed, self.reports):
+        for d in (self.base, self.raw, self.parsed, self.reports, self.screenshots):
             d.mkdir(parents=True, exist_ok=True)
 
     def raw_path(self, tool: str, target: str, suffix: str = "txt") -> Path:

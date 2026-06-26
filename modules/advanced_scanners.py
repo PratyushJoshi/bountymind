@@ -27,19 +27,17 @@ class _ScannerBase:
         self.logger = logger
         self.runner = runner
 
-    @staticmethod
-    def _workspace_dir() -> Path:
-        return Path("output")
+    def _workspace_dir(self) -> Path:
+        """Per-run output base (isolated per website/session via the runner)."""
+        return self.runner.base_dir
 
-    @staticmethod
-    def _parsed_dir() -> Path:
-        path = Path("output") / "parsed"
+    def _parsed_dir(self) -> Path:
+        path = self.runner.base_dir / "parsed"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    @staticmethod
-    def _raw_dir() -> Path:
-        path = Path("output") / "raw"
+    def _raw_dir(self) -> Path:
+        path = self.runner.base_dir / "raw"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -200,7 +198,7 @@ class SQLiScanner(_ScannerBase):
             self.logger.info("SQLi: no parameterized endpoints discovered; skipping")
             return
 
-        output_dir = Path("output") / "sqlmap" / target.domain
+        output_dir = self._workspace_dir() / "sqlmap" / target.domain
         output_dir.mkdir(parents=True, exist_ok=True)
 
         waf_flags: List[str] = []
@@ -525,7 +523,7 @@ class JWTScanner(_ScannerBase):
         if not tokens:
             return
 
-        jwt_dir = Path("output") / "jwt" / target.domain
+        jwt_dir = self._workspace_dir() / "jwt" / target.domain
         jwt_dir.mkdir(parents=True, exist_ok=True)
         for token in list(tokens)[:10]:
             result = self.runner.run(
@@ -799,7 +797,7 @@ class CloudBucketScanner(_ScannerBase):
         self.logger.info("Cloud scan complete. %d open buckets found.", len(target.cloud_bucket_findings))
 
     def _run_s3scanner(self, keywords: set[str], target: TargetContext) -> None:
-        keyword_file = Path("output") / "parsed" / f"cloud_keywords_{target.domain}.txt"
+        keyword_file = self._parsed_dir() / f"cloud_keywords_{target.domain}.txt"
         keyword_file.parent.mkdir(parents=True, exist_ok=True)
         with keyword_file.open("w", encoding="utf-8") as fh:
             for kw in sorted(k for k in keywords if k):

@@ -152,15 +152,29 @@ Everything that needs a human to confirm, validate, or (with authorization) expl
 
 ## Output Structure
 
+Each scan gets its **own directory grouped by website**, so simultaneous
+sessions (e.g. several Kali workspaces/desktops each scanning a different site)
+never overwrite one another:
+
 ```
 output/
-├── raw/           # Raw tool output
-├── parsed/        # Normalized artifacts (incl. dast_urls_*.txt, waf_urls_*.txt)
-├── reports/       # Markdown + HTML reports
-└── screenshots/   # gowitness captures
+└── <website>/                         # one folder per target website
+    └── <timestamp>_<session_id>/      # one folder per scan run (parallel-safe)
+        ├── raw/           # Raw tool output
+        ├── parsed/        # Normalized artifacts (dast_urls_*.txt, waf_urls_*.txt, …)
+        ├── reports/       # Markdown + HTML reports for THIS run
+        └── screenshots/   # gowitness captures
 logs/
-└── framework.log  # Full execution trace
+└── framework.log          # Full execution trace
 ```
+
+Because every run lives under a unique `<timestamp>_<session_id>` folder, two
+workspaces can scan the **same** website at the same time without colliding.
+The output directory for the current run is printed at start (`Output directory:`)
+and again at the end (`All artifacts saved under:`).
+
+> Maintenance-only commands (`--bootstrap`, `--update`, `--check-env`) write any
+> scratch output under `output/_maintenance/` instead of a website folder.
 
 ---
 
