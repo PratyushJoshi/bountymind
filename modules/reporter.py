@@ -701,7 +701,16 @@ class ReportGenerator:
             f"| ℹ️ Info | {info} |",
             f"| **Total** | **{len(s.nuclei_findings)}** |",
             "",
-            "### Extended Capability Results",
+        ]
+        if s.filter_stats:
+            fs = s.filter_stats
+            if fs.get("nuclei_suppressed", 0) > 0:
+                lines += [
+                    f"> **FP filter:** {fs.get('nuclei_suppressed', 0)} likely false positives "
+                    f"removed ({fs.get('nuclei_before', 0)} raw → {fs.get('nuclei_after', 0)} kept).",
+                    "",
+                ]
+        lines += [
             "",
             "| Module | Findings |",
             "|--------|---------|",
@@ -849,6 +858,7 @@ class ReportGenerator:
                 lines += [
                     f"#### {f.name}",
                     f"- **Template:** `{f.template_id}`",
+                    f"- **Confidence:** {getattr(f, 'confidence', 'medium')}",
                     f"- **Host:** `{f.host}`",
                     f"- **Matched at:** `{f.matched_at}`",
                     f"- **CVE(s):** {cve_str}",

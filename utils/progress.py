@@ -241,6 +241,7 @@ class PhaseTracker:
         ("screenshots", "Visual Screenshots"),
         ("waf",         "WAF Detection & Evasion"),
         ("deep-scans",  "Deep Detection Scans"),
+        ("filtering",   "FP Filter & Confidence"),
         ("reporting",   "Report Generation"),
     ]
 

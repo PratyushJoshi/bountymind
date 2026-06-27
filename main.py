@@ -170,15 +170,6 @@ Safety note:
         help="Delete old run directories, keeping the KEEP most recent, then exit",
     )
     parser.add_argument(
-        "--probe-only",
-        action="store_true",
-        default=False,
-        help=(
-            "Run discovery + HTTP probing only, print live hosts summary, "
-            "then exit (no nuclei/deep scans/reporting)"
-        ),
-    )
-    parser.add_argument(
         "--skip-discovery",
         action="store_true",
         default=False,
@@ -227,6 +218,12 @@ Safety note:
         help="Skip WAF detection and evasion scans",
     )
     parser.add_argument(
+        "--probe-only",
+        action="store_true",
+        default=False,
+        help="Run discovery + HTTP probing only, print live hosts, then exit",
+    )
+    parser.add_argument(
         "--auth",
         metavar="TOKEN",
         default=None,
@@ -246,6 +243,37 @@ Safety note:
     )
 
     return parser.parse_args()
+
+
+def _finalize_probe_only(
+    session: ScanSession,
+    progress: ProgressManager,
+    output: OutputManager,
+    manifest,
+    targets: List[str],
+) -> int:
+    """Print live-host summary and exit after a --probe-only run."""
+    session.end_time = datetime.datetime.now(datetime.timezone.utc)
+    rows = [
+        [
+            h.url,
+            str(h.status_code),
+            (h.title or "-")[:80],
+            (h.server_banner or "-")[:40],
+        ]
+        for h in session.live_hosts
+    ]
+    if rows:
+        progress.print_summary_table(
+            rows, ["URL", "Status", "Title", "Server"], "Live Hosts (probe-only)"
+        )
+    else:
+        progress.print_warning("No live hosts detected — check target reachability")
+    progress.print_success(f"{len(session.live_hosts)} live host(s) for {', '.join(targets)}")
+    progress.print_info(f"Output directory: {output.base}")
+    manifest.finish(session, [], status="probe_only")
+    progress.print_info(f"Run manifest: {manifest.path}")
+    return 0 if not session.errors else 1
 
 
 def validate_targets(raw_targets: List[str]) -> List[str]:
@@ -278,9 +306,9 @@ def _build_command_string(args: argparse.Namespace) -> str:
         parts += ["-d", args.domain]
     if args.target_list:
         parts += ["-l", args.target_list]
-    for flag in ("probe_only", "skip_discovery", "skip_scanning", "skip_dirs",
-                 "skip_harvest", "skip_secrets", "skip_cloud", "skip_screenshots",
-                 "skip_waf"):
+    for flag in ("skip_discovery", "skip_scanning", "skip_dirs", "skip_harvest",
+                 "skip_secrets", "skip_cloud", "skip_screenshots", "skip_waf",
+                 "probe_only"):
         if getattr(args, flag, False):
             parts.append("--" + flag.replace("_", "-"))
     if args.format:
@@ -558,30 +586,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             progress.print_error(msg)
 
         if args.probe_only:
-            for phase in (
-                "harvest", "scanning", "secrets", "cloud",
-                "screenshots", "waf", "deep-scans", "reporting",
-            ):
-                progress.set_phase_status(phase, "skipped")
-            rows = [
-                [
-                    h.url,
-                    str(h.status_code),
-                    h.title or "",
-                    h.server_banner or "",
-                ]
-                for h in session.live_hosts
-            ]
-            progress.print_summary_table(
-                rows=rows,
-                headers=["URL", "Status", "Title", "Server"],
-                title=f"Live Hosts ({len(session.live_hosts)})",
-            )
-            progress.print_info(f"Live hosts found: {len(session.live_hosts)}")
-            progress.print_success(f"Output directory: {output.base}")
-            final_status = "completed_with_errors" if session.errors else "completed"
-            manifest.finish(session, [], status=final_status)
-            return 1 if session.errors else 0
+            return _finalize_probe_only(session, progress, output, manifest, targets)
 
         # Phase 1.5 — URL Harvesting
         from modules.harvester import URLHarvester
@@ -618,7 +623,7 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             scanner = ScannerModule(cfg, output, runner, progress)
             live_urls = [h.url for h in session.live_hosts]
             try:
-                session.nuclei_findings = scanner.run(live_urls)
+                session.nuclei_findings = scanner.run(live_urls, live_hosts=session.live_hosts)
                 progress.set_phase_status(
                     "scanning", "done", f"{len(session.nuclei_findings)} findings"
                 )
@@ -785,6 +790,22 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             progress.set_phase_status("deep-scans", "running", label)
             _safe_scan(label, fn)
         progress.set_phase_status("deep-scans", "done")
+
+        # Phase 2.8 — False-positive filtering & confidence scoring
+        progress.set_phase_status("filtering", "running")
+        from utils.finding_filter import FindingFilter
+        filt = FindingFilter(cfg)
+        filter_stats = filt.apply(session)
+        suppressed = filter_stats.get("nuclei_suppressed", 0)
+        if suppressed:
+            progress.print_info(
+                f"Filtered {suppressed} likely false positive(s) — "
+                f"{filter_stats.get('nuclei_after', 0)} nuclei findings kept"
+            )
+        progress.set_phase_status(
+            "filtering", "done",
+            f"{filter_stats.get('nuclei_after', len(session.nuclei_findings))} kept",
+        )
 
         # Phase 3 — Reporting
         progress.set_phase_status("reporting", "running")

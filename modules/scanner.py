@@ -95,9 +95,12 @@ class ScannerModule:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run(self, live_urls: List[str]) -> List[NucleiFinding]:
+    def run(self, live_urls: List[str], live_hosts: Optional[List] = None) -> List[NucleiFinding]:
         """
         Scan all live URLs with nuclei and return findings.
+
+        When ``live_hosts`` is provided, a second technology-targeted nuclei pass
+        runs templates tagged for detected stacks (PHP, Java, Node, WordPress, …).
         """
         self._progress.print_phase("Phase 2 — Vulnerability Scanning")
 
@@ -124,6 +127,25 @@ class ScannerModule:
         self._update_templates(binary)
 
         findings = self._run_nuclei(live_urls, binary)
+
+        # Technology-targeted pass: run stack-specific templates for detected frameworks.
+        if live_hosts and self._cfg.get("scanning", "tech_targeted_scan", default=True):
+            from utils.finding_filter import collect_tech_tags
+            tech_tags = collect_tech_tags(live_hosts)
+            if tech_tags:
+                log.info("Running tech-targeted nuclei pass: tags=%s", tech_tags)
+                self._progress.print_info(
+                    f"Tech-targeted nuclei scan: {', '.join(tech_tags[:8])}"
+                    + ("…" if len(tech_tags) > 8 else "")
+                )
+                extra = self._run_nuclei(live_urls, binary, include_tags=tech_tags)
+                # Merge; dedupe happens later in finding_filter.
+                seen = {(f.template_id, f.matched_at) for f in findings}
+                for f in extra:
+                    key = (f.template_id, f.matched_at)
+                    if key not in seen:
+                        findings.append(f)
+                        seen.add(key)
 
         self._save_results(findings)
         self._print_findings_summary(findings)
@@ -159,7 +181,12 @@ class ScannerModule:
     # Nuclei execution
     # ------------------------------------------------------------------
 
-    def _run_nuclei(self, urls: List[str], binary: str) -> List[NucleiFinding]:
+    def _run_nuclei(
+        self,
+        urls: List[str],
+        binary: str,
+        include_tags: Optional[List[str]] = None,
+    ) -> List[NucleiFinding]:
         """
         Run nuclei with safety-enforced tag exclusions and JSON output.
         """
@@ -194,8 +221,10 @@ class ScannerModule:
         if excluded:
             cmd += ["-etags", ",".join(excluded)]
 
-        # Included tags (scope narrowing)
-        if included:
+        # Included tags (scope narrowing) — tech-targeted pass overrides config.
+        if include_tags:
+            cmd += ["-tags", ",".join(include_tags)]
+        elif included:
             cmd += ["-tags", ",".join(included)]
 
         # Custom templates path

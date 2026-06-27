@@ -324,6 +324,15 @@ scanning:
   # Timeout per nuclei request (seconds)
   nuclei_timeout: 10
 
+  # False-positive reduction (recommended for bug-bounty reporting)
+  filter_false_positives: true
+  dedupe_findings: true
+  suppress_generic_info: true
+  # Minimum confidence to include in reports: low | medium | high
+  min_confidence: low
+  # Run an extra nuclei pass tagged for detected tech (PHP, Java, Node, WordPress, …)
+  tech_targeted_scan: true
+
 # -----------------------------------------------------------------------------
 # REPORTING SETTINGS
 # -----------------------------------------------------------------------------

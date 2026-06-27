@@ -148,6 +148,7 @@ class NucleiFinding:
     cvss_score: Optional[float] = None
     cve_ids: List[str] = field(default_factory=list)
     raw: str = ""
+    confidence: str = "medium"  # high | medium | low — set by finding_filter
     timestamp: datetime.datetime = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
@@ -287,6 +288,7 @@ class TargetContext:
     evasion_findings: List[EvasionFinding] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    filter_stats: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def duration(self) -> Optional[datetime.timedelta]:

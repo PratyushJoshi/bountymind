@@ -129,7 +129,7 @@ bountymind --prune-runs 10      # keep the 10 newest runs, delete the rest
 | `--skip-cloud` | Cloud bucket enumeration |
 | `--skip-screenshots` | Visual screenshot capture (gowitness) |
 | `--skip-waf` | WAF detection & evasion |
-| `--probe-only` | Discovery + HTTP probing only; print live hosts summary and exit |
+| `--probe-only` | Discovery + HTTP probing only; print live hosts and exit (no scan/report) |
 
 ---
 
@@ -292,6 +292,8 @@ cp config/config.example.yaml config/config.yaml
 Notable settings (under `scanning:`):
 - `included_tags: []` — empty means **maximum** nuclei coverage (whole template set minus excluded tags)
 - `dast_enabled: true` / `dast_max_urls: 1500` — control the DAST parameter-fuzzing phase
+- `filter_false_positives: true` / `tech_targeted_scan: true` — drop scanner noise and run stack-specific nuclei passes (PHP, Java, Node, WordPress, …)
+- `min_confidence: low` — raise to `medium` or `high` to further reduce false positives in reports
 
 Optional API keys (Shodan, VirusTotal, SecurityTrails, etc.) enhance discovery but are not required.
 
