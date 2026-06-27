@@ -327,6 +327,30 @@ class ConfigManager:
         return int(self.get("safety", "global_rate_limit", default=20))
 
     # ------------------------------------------------------------------
+    # Scope settings
+    # ------------------------------------------------------------------
+
+    @property
+    def scope_extra_domains(self) -> List[str]:
+        return list(self.get("scope", "domains", default=[]))
+
+    @property
+    def scope_strict(self) -> bool:
+        return bool(self.get("scope", "strict", default=True))
+
+    @property
+    def scope_block_third_party(self) -> bool:
+        return bool(self.get("scope", "block_third_party", default=True))
+
+    @property
+    def scope_blocklist_extra(self) -> List[str]:
+        return list(self.get("scope", "blocklist_extra", default=[]))
+
+    @property
+    def scope_allowlist_extra(self) -> List[str]:
+        return list(self.get("scope", "allowlist", default=[]))
+
+    # ------------------------------------------------------------------
     # URL harvesting settings (gau, waybackurls, katana)
     # ------------------------------------------------------------------
 

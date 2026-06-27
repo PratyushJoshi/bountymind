@@ -528,9 +528,25 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
     )
     if args.auth:
         session.auth_token = args.auth
+
+    from utils.scope import build_scope_domains, apply_scope_to_session
+    scope_set = build_scope_domains(targets, cfg.scope_extra_domains)
+    session.scope_domains = sorted(scope_set)
+    session.scope_strict = cfg.scope_strict
+    session.scope_block_third_party = cfg.scope_block_third_party
+    session.scope_blocklist_extra = list(cfg.scope_blocklist_extra)
+    session.scope_allowlist_extra = list(cfg.scope_allowlist_extra)
+
     progress.print_info(f"Session ID: {session_id}")
     progress.print_info(f"Output directory: {output.base}")
-    log.info("Session ID: %s | Targets: %s | Output: %s", session_id, targets, output.base)
+    progress.print_info(
+        f"Scope (strict={session.scope_strict}, block-3p={session.scope_block_third_party}): "
+        f"{', '.join(session.scope_domains)}"
+    )
+    log.info(
+        "Session ID: %s | Targets: %s | Output: %s | Scope: %s",
+        session_id, targets, output.base, session.scope_domains,
+    )
 
     # Machine-readable run manifest (status=running now, finalized at the end).
     from utils.manifest import RunManifest
@@ -564,6 +580,11 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
         else:
             progress.set_phase_status("discovery", "skipped")
 
+        if session.scope_strict:
+            dropped = apply_scope_to_session(session, strict=True)
+            if dropped:
+                progress.print_info(f"Scope: removed {dropped} out-of-scope subdomain(s)")
+
         # Phase 1b — Probing
         progress.set_phase_status("probing", "running")
         if args.skip_dirs:
@@ -585,6 +606,11 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             progress.set_phase_status("probing", "error")
             progress.print_error(msg)
 
+        if session.scope_strict:
+            dropped = apply_scope_to_session(session, strict=True)
+            if dropped:
+                progress.print_info(f"Scope: removed {dropped} out-of-scope host/path(s)")
+
         if args.probe_only:
             return _finalize_probe_only(session, progress, output, manifest, targets)
 
@@ -596,7 +622,9 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             harvester = URLHarvester(cfg, output, runner, progress)
             live_urls_for_harvest = [h.url for h in session.live_hosts]
             try:
-                session.harvested_urls = harvester.run(targets, live_urls_for_harvest)
+                session.harvested_urls = harvester.run(
+                    targets, live_urls_for_harvest, scope_domains=session.scope_domains,
+                )
                 progress.set_phase_status(
                     "harvest", "done", f"{len(session.harvested_urls)} URLs"
                 )
@@ -607,6 +635,11 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
                 progress.set_phase_status("harvest", "error")
         else:
             progress.set_phase_status("harvest", "skipped")
+
+        if session.scope_strict:
+            dropped = apply_scope_to_session(session, strict=True)
+            if dropped:
+                progress.print_info(f"Scope: removed {dropped} out-of-scope harvested URL(s)")
 
         if not args.skip_discovery and session.subdomains:
             from modules.discovery import DiscoveryModule as _DM

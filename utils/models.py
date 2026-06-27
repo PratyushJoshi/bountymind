@@ -283,6 +283,13 @@ class TargetContext:
     dast_findings: List[Dict[str, Any]] = field(default_factory=list)
     sensitive_paths: List[Dict[str, Any]] = field(default_factory=list)
     auth_token: Optional[str] = None
+    # --- Scope control ---
+    scope_domains: List[str] = field(default_factory=list)
+    scope_strict: bool = True
+    scope_block_third_party: bool = True
+    scope_blocklist_extra: List[str] = field(default_factory=list)
+    scope_allowlist_extra: List[str] = field(default_factory=list)
+    scope_filtered_count: int = 0
     # --- WAF detection & evasion results ---
     waf_detections: Dict[str, str] = field(default_factory=dict)   # url → waf_name
     evasion_findings: List[EvasionFinding] = field(default_factory=list)

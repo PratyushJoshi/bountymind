@@ -53,8 +53,18 @@ class _ScannerBase:
             .strip("_")
         )
 
-    @staticmethod
-    def _live_urls(target: TargetContext) -> List[str]:
+    def _scope_domains(self, target: TargetContext) -> frozenset:
+        raw = getattr(target, "scope_domains", None) or target.targets or []
+        return frozenset(raw)
+
+    def _in_scope(self, target: TargetContext, url: Optional[str]) -> bool:
+        from utils.scope import ScopePolicy, url_is_allowed
+        policy = ScopePolicy.from_session(target)
+        if not policy.strict and not policy.block_third_party:
+            return True
+        return url_is_allowed(url or "", policy)
+
+    def _live_urls(self, target: TargetContext) -> List[str]:
         urls = []
         seen = set()
         for host in target.live_hosts:
@@ -64,6 +74,10 @@ class _ScannerBase:
             if url not in seen:
                 seen.add(url)
                 urls.append(url)
+        if getattr(target, "scope_strict", True) or getattr(target, "scope_block_third_party", True):
+            from utils.scope import ScopePolicy, filter_urls
+            policy = ScopePolicy.from_session(target)
+            urls, _ = filter_urls(urls, policy)
         return urls
 
     @staticmethod
@@ -85,9 +99,13 @@ class _ScannerBase:
 
         for item in getattr(target, "harvested_urls", []) or []:
             url = item.get("url") if isinstance(item, dict) else getattr(item, "url", None)
+            if url and not self._in_scope(target, url):
+                continue
             _add(url)
         for host in getattr(target, "live_hosts", []) or []:
             url = host.get("url") if isinstance(host, dict) else getattr(host, "url", None)
+            if url and not self._in_scope(target, url):
+                continue
             _add(url)
 
         return urls[:limit]

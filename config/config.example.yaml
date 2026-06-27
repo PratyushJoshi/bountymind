@@ -349,6 +349,23 @@ reporting:
   include_executive_summary: true
 
 # -----------------------------------------------------------------------------
+# SCOPE — in-scope domain enforcement
+# -----------------------------------------------------------------------------
+# URLs from passive harvesters (gau, waybackurls, katana) often include external
+# links (google.com, CDNs, analytics). When strict=true, only URLs whose hostname
+# matches a target domain (or subdomain) are kept for scanning.
+scope:
+  # Additional in-scope domains/wildcards beyond CLI targets (e.g. "*.example.com")
+  domains: []
+  # When true, discard URLs whose hostname is not under a scope domain
+  strict: true
+  # Block known CDNs / analytics / big-tech (google.com, cloudfront.net, etc.)
+  block_third_party: true
+  # Extra suffixes to block; allowlist overrides blocklist for related assets
+  blocklist_extra: []
+  allowlist: []
+
+# -----------------------------------------------------------------------------
 # SAFETY & SCOPE CONTROLS
 # -----------------------------------------------------------------------------
 safety:

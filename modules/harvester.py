@@ -34,7 +34,7 @@ import re
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Set
+from typing import List, Optional, Sequence, Set
 
 from utils.config_manager import ConfigManager
 from utils.logger import get_logger
@@ -77,13 +77,20 @@ class URLHarvester:
     # Public interface
     # ------------------------------------------------------------------
 
-    def run(self, targets: List[str], live_urls: List[str]) -> List[HarvestedURL]:
+    def run(
+        self,
+        targets: List[str],
+        live_urls: List[str],
+        scope_domains: Optional[Sequence[str]] = None,
+    ) -> List[HarvestedURL]:
         """
         Harvest URLs for all targets.
 
         Args:
-            targets:   Root domain list (for passive sources).
-            live_urls: Confirmed live URLs (for katana crawling).
+            targets:        Root domain list (for passive sources).
+            live_urls:      Confirmed live URLs (for katana crawling).
+            scope_domains:  In-scope domains; out-of-scope URLs are discarded
+                            when scope strict mode is active (default).
 
         Returns:
             Deduplicated list of HarvestedURL records.
@@ -91,6 +98,29 @@ class URLHarvester:
         if not self._cfg.harvesting_enabled:
             log.info("URL harvesting disabled in config; skipping")
             return []
+
+        from utils.scope import (
+            ScopePolicy,
+            build_scope_domains,
+            filter_urls,
+            format_scope_drop_message,
+            normalize_scope_domain,
+        )
+
+        policy = ScopePolicy(
+            domains=frozenset(scope_domains) if scope_domains else build_scope_domains(targets),
+            strict=self._cfg.scope_strict,
+            block_third_party=self._cfg.scope_block_third_party,
+            blocklist_extra=frozenset(
+                normalize_scope_domain(d) for d in self._cfg.scope_blocklist_extra if d
+            ),
+            allowlist_extra=frozenset(
+                normalize_scope_domain(d) for d in self._cfg.scope_allowlist_extra if d
+            ),
+        )
+
+        if policy.strict or policy.block_third_party:
+            live_urls, _ = filter_urls(list(live_urls), policy)
 
         self._progress.print_phase("Phase 1.5 — URL Harvesting & Surface Mapping")
         all_urls: Set[str] = set()
@@ -133,9 +163,14 @@ class URLHarvester:
 
         self._progress.advance(task, status="processing")
 
-        # Apply safety cap
+        # Apply safety cap (after scope filter)
         max_urls = self._cfg.harvesting_max_urls
         url_list = list(all_urls)
+        if policy.strict or policy.block_third_party:
+            url_list, stats = filter_urls(url_list, policy)
+            msg = format_scope_drop_message(stats)
+            if msg:
+                self._progress.print_info(msg)
         if len(url_list) > max_urls:
             log.warning(
                 "Harvested URL count (%d) exceeds max_urls_per_target=%d; truncating",

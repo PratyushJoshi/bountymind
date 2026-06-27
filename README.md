@@ -295,6 +295,18 @@ Notable settings (under `scanning:`):
 - `filter_false_positives: true` / `tech_targeted_scan: true` — drop scanner noise and run stack-specific nuclei passes (PHP, Java, Node, WordPress, …)
 - `min_confidence: low` — raise to `medium` or `high` to further reduce false positives in reports
 
+### Scope enforcement
+
+```yaml
+scope:
+  domains: []              # extra in-scope domains (e.g. "*.example.com", "cdn.example.com")
+  strict: true             # keep only target + subdomains
+  block_third_party: true  # drop google.com, cloudfront.net, analytics CDNs, etc.
+  allowlist: []            # force-keep related third-party assets if needed
+```
+
+All target subdomains (`api.`, `cdn.`, `staging.`, …) are **always kept**. Passive harvesters often return external links; the blocklist removes CDN/analytics noise without touching in-scope assets.
+
 Optional API keys (Shodan, VirusTotal, SecurityTrails, etc.) enhance discovery but are not required.
 
 ---
