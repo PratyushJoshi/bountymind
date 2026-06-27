@@ -169,22 +169,125 @@ class ProbingModule:
 
         task = self._progress.add_task("[cyan]HTTP Probing", total=len(urls))
 
-        if self._cfg.is_tool_enabled("httpx"):
+        httpx_binary = self._cfg.get_tool_binary("httpx")
+        if self._cfg.is_tool_enabled("httpx") and self._runner.check_binary_available(httpx_binary):
             live_hosts = self._run_httpx(url_list_path)
-        elif self._cfg.is_tool_enabled("httprobe"):
+        elif self._cfg.is_tool_enabled("httprobe") and \
+                self._runner.check_binary_available(self._cfg.get_tool_binary("httprobe")):
             live_hosts = self._run_httprobe(hosts)
         else:
-            log.warning("Neither httpx nor httprobe is enabled; skipping HTTP probing")
-            self._progress.print_warning("httpx/httprobe not available — skipping HTTP probing")
+            log.warning("Neither httpx nor httprobe available; using built-in fallback prober")
+            self._progress.print_warning(
+                "httpx/httprobe not found — using built-in HTTP prober (install httpx for full metadata)"
+            )
+
+        # CRITICAL reliability guard: if the external prober found nothing (missing
+        # tool, version flag mismatch, parse failure, etc.) but we DO have candidate
+        # hosts, fall back to a pure-Python prober so a reachable target is never
+        # silently dropped. An empty live_hosts list cascades into "no findings".
+        if not live_hosts and urls:
+            log.info("No live hosts from primary prober; running built-in fallback prober")
+            self._progress.print_info("Primary prober returned 0 hosts — trying built-in fallback")
+            live_hosts = self._fallback_probe(urls)
+            if live_hosts:
+                self._progress.print_success(
+                    f"Fallback prober recovered {len(live_hosts)} live host(s)"
+                )
 
         self._progress.advance(task, amount=len(urls))
         url_list_path.unlink(missing_ok=True)
         return live_hosts
 
+    def _fallback_probe(self, urls: List[str]) -> List[LiveHost]:
+        """
+        Dependency-free HTTP prober used when httpx/httprobe are unavailable or
+        return nothing. Uses only the Python standard library so the pipeline
+        always has live hosts to scan for any reachable target, regardless of
+        which external Go tools are installed.
+
+        Deduplicates by host, preferring HTTPS over HTTP when both respond.
+        """
+        import concurrent.futures
+        import ssl
+        import urllib.request
+        import urllib.error
+
+        timeout = max(3, int(self._cfg.http_timeout))
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            )
+        }
+
+        def probe_one(url: str) -> Optional[LiveHost]:
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                    body = resp.read(65536)
+                    status = getattr(resp, "status", None) or resp.getcode() or 0
+                    final_url = resp.geturl() or url
+                    server = resp.headers.get("Server", "") or ""
+                    clen = resp.headers.get("Content-Length")
+                    title = self._extract_title(body)
+                    return LiveHost(
+                        url=final_url,
+                        status_code=int(status),
+                        title=title,
+                        redirect_url=final_url if final_url != url else None,
+                        content_length=int(clen) if clen and clen.isdigit() else len(body),
+                        server_banner=server,
+                    )
+            except urllib.error.HTTPError as exc:
+                # An HTTP error code still means the host is alive and serving.
+                return LiveHost(url=url, status_code=int(getattr(exc, "code", 0) or 0))
+            except Exception as exc:  # noqa: BLE001 - connection refused/timeout/etc.
+                log.debug("fallback probe failed for %s: %s", url, exc)
+                return None
+
+        results: Dict[str, LiveHost] = {}
+        max_workers = min(20, max(4, self._cfg.http_threads))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_map = {pool.submit(probe_one, u): u for u in urls}
+            for fut in concurrent.futures.as_completed(future_map):
+                host = fut.result()
+                if not host or not host.url:
+                    continue
+                key = host.url.split("://", 1)[-1].split("/", 1)[0]
+                existing = results.get(key)
+                # Prefer HTTPS over HTTP for the same host.
+                if existing is None or (
+                    host.url.startswith("https://") and existing.url.startswith("http://")
+                ):
+                    results[key] = host
+        return list(results.values())
+
+    @staticmethod
+    def _extract_title(body: bytes) -> str:
+        """Best-effort <title> extraction from a response body."""
+        try:
+            text = body.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return ""
+        m = re.search(r"<title[^>]*>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        return m.group(1).strip()[:200] if m else ""
+
     def _run_httpx(self, url_list_path: Path) -> List[LiveHost]:
         """
         Run httpx with JSON output for structured parsing.
-        Captures: status, title, tech, content-length, location, server.
+
+        We deliberately keep the flag set MINIMAL. Modern httpx (v1.3+) already
+        includes status_code, title, tech, webserver, content_length, location,
+        etc. in its ``-json`` output by default. Passing the legacy display
+        column flags (``-status-code``, ``-content-length``, ``-tech-detect``,
+        ``-server`` …) is both redundant and dangerous: those flag names have
+        changed across httpx releases, and a single unknown flag makes httpx
+        abort with no output — which previously produced ZERO live hosts and
+        silently killed the rest of the pipeline. Fewer flags = far more robust
+        across versions.
         """
         binary = self._cfg.get_tool_binary("httpx")
         timeout = self._cfg.http_timeout
@@ -195,15 +298,9 @@ class ProbingModule:
             "-l", str(url_list_path),
             "-json",
             "-silent",
+            "-no-color",
             "-timeout", str(timeout),
             "-threads", str(threads),
-            "-title",
-            "-status-code",
-            "-content-length",
-            "-location",
-            "-tech-detect",
-            "-server",
-            "-no-color",
         ]
 
         if self._cfg.get("probing", "follow_redirects", default=True):
@@ -217,10 +314,30 @@ class ProbingModule:
             save_raw=True,
         )
 
-        return self._parse_httpx_output(result.stdout)
+        hosts = self._parse_httpx_output(result.stdout)
+        if not hosts and result.return_code not in (0, None):
+            log.warning(
+                "httpx produced no parseable hosts (rc=%s). Stderr: %s",
+                result.return_code, (result.stderr or "")[:300],
+            )
+        return hosts
+
+    @staticmethod
+    def _first(data: dict, *keys, default=None):
+        """Return the first present key (tolerates hyphen/underscore variants)."""
+        for key in keys:
+            if key in data and data[key] not in (None, ""):
+                return data[key]
+        return default
 
     def _parse_httpx_output(self, stdout: str) -> List[LiveHost]:
-        """Parse httpx JSON output lines into LiveHost records."""
+        """
+        Parse httpx JSON output lines into LiveHost records.
+
+        Tolerant of both modern (underscore) and legacy (hyphen) JSON key
+        styles, and of httpx versions that emit ``input`` instead of ``url``.
+        Entries explicitly marked ``failed`` are skipped.
+        """
         hosts = []
         for line in stdout.splitlines():
             line = line.strip()
@@ -228,20 +345,50 @@ class ProbingModule:
                 continue
             try:
                 data = json.loads(line)
-                host = LiveHost(
-                    url=data.get("url", ""),
-                    status_code=data.get("status-code", 0),
-                    title=data.get("title", ""),
-                    redirect_url=data.get("location") or None,
-                    content_length=data.get("content-length", 0),
-                    technologies=data.get("tech", []),
-                    server_banner=data.get("webserver", ""),
-                    headers=data.get("headers", {}),
-                )
-                if host.url:
-                    hosts.append(host)
             except json.JSONDecodeError:
                 log.debug("httpx: could not parse JSON line: %s", line[:100])
+                continue
+
+            if data.get("failed") is True:
+                continue
+
+            url = self._first(data, "url", "input", "final_url", default="")
+            if not url:
+                # Reconstruct from scheme+host+port when url is absent.
+                host_part = self._first(data, "host", "input", default="")
+                if host_part:
+                    scheme = self._first(data, "scheme", default="http")
+                    url = f"{scheme}://{host_part}"
+            if not url:
+                continue
+            # Guarantee a scheme so downstream tools (nuclei, dalfox, …) accept it.
+            if not url.startswith(("http://", "https://")):
+                scheme = self._first(data, "scheme", default="http")
+                url = f"{scheme}://{url}"
+
+            techs = self._first(data, "tech", "technologies", default=[]) or []
+            if isinstance(techs, str):
+                techs = [techs]
+
+            try:
+                status_code = int(self._first(data, "status_code", "status-code", default=0) or 0)
+            except (TypeError, ValueError):
+                status_code = 0
+            try:
+                content_length = int(self._first(data, "content_length", "content-length", default=0) or 0)
+            except (TypeError, ValueError):
+                content_length = 0
+
+            hosts.append(LiveHost(
+                url=url,
+                status_code=status_code,
+                title=self._first(data, "title", default="") or "",
+                redirect_url=self._first(data, "location", "final_url", default=None),
+                content_length=content_length,
+                technologies=list(techs),
+                server_banner=self._first(data, "webserver", "server", default="") or "",
+                headers=data.get("header") or data.get("headers") or {},
+            ))
         return hosts
 
     def _run_httprobe(self, hosts: List[str]) -> List[LiveHost]:

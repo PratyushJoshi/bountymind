@@ -129,6 +129,7 @@ bountymind --prune-runs 10      # keep the 10 newest runs, delete the rest
 | `--skip-cloud` | Cloud bucket enumeration |
 | `--skip-screenshots` | Visual screenshot capture (gowitness) |
 | `--skip-waf` | WAF detection & evasion |
+| `--probe-only` | Discovery + HTTP probing only; print live hosts summary and exit |
 
 ---
 

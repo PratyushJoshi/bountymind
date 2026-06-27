@@ -170,6 +170,15 @@ Safety note:
         help="Delete old run directories, keeping the KEEP most recent, then exit",
     )
     parser.add_argument(
+        "--probe-only",
+        action="store_true",
+        default=False,
+        help=(
+            "Run discovery + HTTP probing only, print live hosts summary, "
+            "then exit (no nuclei/deep scans/reporting)"
+        ),
+    )
+    parser.add_argument(
         "--skip-discovery",
         action="store_true",
         default=False,
@@ -269,8 +278,9 @@ def _build_command_string(args: argparse.Namespace) -> str:
         parts += ["-d", args.domain]
     if args.target_list:
         parts += ["-l", args.target_list]
-    for flag in ("skip_discovery", "skip_scanning", "skip_dirs", "skip_harvest",
-                 "skip_secrets", "skip_cloud", "skip_screenshots", "skip_waf"):
+    for flag in ("probe_only", "skip_discovery", "skip_scanning", "skip_dirs",
+                 "skip_harvest", "skip_secrets", "skip_cloud", "skip_screenshots",
+                 "skip_waf"):
         if getattr(args, flag, False):
             parts.append("--" + flag.replace("_", "-"))
     if args.format:
@@ -546,6 +556,32 @@ def run_scan(args: argparse.Namespace, cfg: ConfigManager, progress: ProgressMan
             session.errors.append(msg)
             progress.set_phase_status("probing", "error")
             progress.print_error(msg)
+
+        if args.probe_only:
+            for phase in (
+                "harvest", "scanning", "secrets", "cloud",
+                "screenshots", "waf", "deep-scans", "reporting",
+            ):
+                progress.set_phase_status(phase, "skipped")
+            rows = [
+                [
+                    h.url,
+                    str(h.status_code),
+                    h.title or "",
+                    h.server_banner or "",
+                ]
+                for h in session.live_hosts
+            ]
+            progress.print_summary_table(
+                rows=rows,
+                headers=["URL", "Status", "Title", "Server"],
+                title=f"Live Hosts ({len(session.live_hosts)})",
+            )
+            progress.print_info(f"Live hosts found: {len(session.live_hosts)}")
+            progress.print_success(f"Output directory: {output.base}")
+            final_status = "completed_with_errors" if session.errors else "completed"
+            manifest.finish(session, [], status=final_status)
+            return 1 if session.errors else 0
 
         # Phase 1.5 — URL Harvesting
         from modules.harvester import URLHarvester
